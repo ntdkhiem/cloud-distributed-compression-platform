@@ -3,7 +3,7 @@ _As a complete noob in Cloud, this is a challenge for myself to learn everything
 
 A cloud‑native distributed compression platform that splits large files into chunks, compresses them in parallel across a cluster of worker nodes, and seamlessly merges the results. 
 
-_Inspired by Silicon Valley series :)_
+_Inspired by Silicon Valley series and [codingchallenges.fyi](https://codingchallenges.fyi/challenges/challenge-huffman) :)_
 
 Might be doing a Youtube live-coding for this.
 
