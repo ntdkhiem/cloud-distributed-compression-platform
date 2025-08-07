@@ -10,7 +10,7 @@ _Inspired by Silicon Valley series and [codingchallenges.fyi](https://codingchal
 # TODO
 - [X] Develop Huffman's algorithm to be used for lossless data compression.
 - [X] Create a pipeline that takes in data for encoding or decoding with the algorithm.
-- [ ] Create simple tests for the algorithm and the pipeline.
+- [X] Create simple tests for the algorithm and the pipeline.
 - [ ] Split input file into chunks for distributed compressing.
 - [ ] Turn the pipeline into a REST API that accepts files (or streams) and returns compressed results.
 - [ ] Containerize the service and add proper environment configs.
