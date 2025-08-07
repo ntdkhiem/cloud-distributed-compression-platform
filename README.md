@@ -5,13 +5,14 @@ A cloud‑native distributed compression platform that splits large files into c
 
 _Inspired by Silicon Valley series and [codingchallenges.fyi](https://codingchallenges.fyi/challenges/challenge-huffman) :)_
 
-Might be doing a Youtube live-coding for this.
+[Youtube Code-Along](https://www.youtube.com/playlist?list=PLSg4pGV1EkBo1JCfXl4zZoHkbFe4zk_EL)
 
 # TODO
 - [X] Develop Huffman's algorithm to be used for lossless data compression.
 - [X] Create a pipeline that takes in data for encoding or decoding with the algorithm.
+- [ ] Create simple tests for the algorithm and the pipeline.
 - [ ] Split input file into chunks for distributed compressing.
-- [ ] Turn the pipeline into a REST API that accepts files (or streams) and returnes compressed results.
+- [ ] Turn the pipeline into a REST API that accepts files (or streams) and returns compressed results.
 - [ ] Containerize the service and add proper environment configs.
 - [ ] Orchestrate the compression service on a cluster using Kubernetes.
 - [ ] Expose metrics with Prometheus and see them in Grafana.
