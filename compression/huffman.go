@@ -234,6 +234,9 @@ func Compress(filePath string) (*bytes.Buffer, error) {
 		}
 	}
 	fmt.Printf("Original File size: %d bytes\n", originalSize)
+	if originalSize == 0 {
+		return &compressData, nil
+	}
 
 	pq := make(priorityQueue, len(store))
 	pt := make(prefixTable)
@@ -319,6 +322,10 @@ func Decompress(filePath string) (*strings.Builder, error) {
 	var decompText strings.Builder
 
 	fmt.Println("Decoding...")
+
+    if buf.Len() == 0 {
+        return &decompText, nil
+    }
 
 	// fmt.Println("Extracting header length")
 	headerLenBin := make([]byte, 2)

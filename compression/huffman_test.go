@@ -2,6 +2,7 @@ package compression
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -74,6 +75,49 @@ func TestDecompress_InvalidFile(t *testing.T) {
 
 func TestCompressDecompress_Basic(t *testing.T) {
 	text := "simple roundtrip"
+	roundTripCheck(t, text)
+}
+
+func TestCompressDecompress_Empty(t *testing.T) {
+	text := ""
+	roundTripCheck(t, text)
+}
+
+func TestCompressDecompress_Repetitive(t *testing.T) {
+	text := strings.Repeat("ab", 1000)
+	roundTripCheck(t, text)
+}
+
+func TestCompressDecompress_Large(t *testing.T) {
+	text := strings.Repeat("abcde", 2000) // ~10 KB
+	roundTripCheck(t, text)
+}
+
+func TestCompressDecompress_Larger(t *testing.T) {
+	text := strings.Repeat("abcdefg1234567", 75000) // ~1 MB
+	roundTripCheck(t, text)
+}
+
+func TestCompressDecompress_Largest(t *testing.T) {
+	text := strings.Repeat("Lorem ipsum dolor sit amet, consectetur adipiscing elit. ", 170000) // ~10 MB
+	roundTripCheck(t, text)
+}
+
+func TestCompressDecompress_100MB(t *testing.T) {
+	t.Skip("Skip by default. Run manually when needed.")
+	text := strings.Repeat("abc1234567890xyz", 7_000_000) // ~100MB
+	roundTripCheck(t, text)
+}
+
+func TestCompressDecompress_150MB(t *testing.T) {
+	t.Skip("Skip by default. Run manually when needed.")
+	text := strings.Repeat("abcdefgh12345678", 9_800_000) // ~150MB
+	roundTripCheck(t, text)
+}
+
+func TestCompressDecompress_200MB(t *testing.T) {
+	t.Skip("Skip by default. Run manually when needed.")
+	text := strings.Repeat("GoLangCompressionStressTest!", 7_800_000) // ~200MB
 	roundTripCheck(t, text)
 }
 
