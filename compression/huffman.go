@@ -171,7 +171,7 @@ func buildHeaderRecursive(root *node, header *bytes.Buffer) error {
 	return nil
 }
 
-func buildBody(pt prefixTable, bodyContent []string) *bytes.Buffer {
+func buildBody(pt prefixTable, bodyContent []string) (*bytes.Buffer, uint8) {
 	var bodyOutput bytes.Buffer
 	var currentByte byte
 	var bitCount int
@@ -195,11 +195,14 @@ func buildBody(pt prefixTable, bodyContent []string) *bytes.Buffer {
 	}
 
 	// flush the remaining bits (pad with 0s on the right)
+	var paddedZeros uint8 = 0
+
 	if bitCount > 0 {
-		currentByte <<= (8 - bitCount) // shift remaining bits to fill the byte
+		paddedZeros = uint8(8 - bitCount)
+		currentByte <<= paddedZeros // shift remaining bits to fill the byte
 		bodyOutput.WriteByte(currentByte)
 	}
-	return &bodyOutput
+	return &bodyOutput, paddedZeros
 }
 
 func Compress(filePath string) (*bytes.Buffer, error) {
@@ -276,11 +279,12 @@ func Compress(filePath string) (*bytes.Buffer, error) {
 	}
 
 	fmt.Println("Building Body")
-	encodedBody := buildBody(pt, body)
-	fmt.Printf("Body size: %d bytes\n", encodedBody.Len())
+	encodedBody, paddedZeros := buildBody(pt, body)
+	fmt.Printf("Body size: %d bytes\tPadded 0s: %d\n", encodedBody.Len(), paddedZeros)
 
 	fmt.Println("Merge Header And Body")
-	compressData.Grow(2 + header.Len() + encodedBody.Len())
+	// header's length + header + body's padded zeros + body
+	compressData.Grow(2 + header.Len() + 1 + encodedBody.Len())
 	headerBin := make([]byte, 2)
 	binary.LittleEndian.PutUint16(headerBin, uint16(header.Len()))
 	compressData.Write(headerBin)
@@ -290,6 +294,11 @@ func Compress(filePath string) (*bytes.Buffer, error) {
 		return nil, fmt.Errorf("Error writing header: %w", err)
 	}
 	fmt.Printf("Write %d bytes of header to compressData\n", n)
+	err = compressData.WriteByte(paddedZeros)
+	if err != nil {
+		return nil, fmt.Errorf("Error writing body padded 0s: %w", err)
+	}
+	fmt.Println("Write 1 byte of padded 0s to compressData")
 	n, err = encodedBody.WriteTo(&compressData)
 	if err != nil {
 		return nil, fmt.Errorf("Error writing body: %w", err)
@@ -311,7 +320,7 @@ func Decompress(filePath string) (*strings.Builder, error) {
 
 	fmt.Println("Decoding...")
 
-	fmt.Println("Extracting header length")
+	// fmt.Println("Extracting header length")
 	headerLenBin := make([]byte, 2)
 	_, err = buf.Read(headerLenBin)
 	if err != nil {
@@ -320,13 +329,13 @@ func Decompress(filePath string) (*strings.Builder, error) {
 	headerLen := binary.LittleEndian.Uint16(headerLenBin)
 	fmt.Printf("Extracted header length: %d\n", headerLen)
 
-	fmt.Println("Splitting text to header and body sections")
+	// fmt.Println("Splitting text to header and body sections")
 	headerBin := make([]byte, headerLen)
 	_, err = buf.Read(headerBin)
 	if err != nil {
 		return nil, fmt.Errorf("Error splitting header and body: %w", err)
 	}
-	fmt.Println("Building HuffmanTree with extracted header")
+	// fmt.Println("Building HuffmanTree with extracted header")
 	ht := node{}
 	// character code + Huffman assigned code + bits -> 4 + 4 + 1 = 9 bytes
 	for i := 0; i < len(headerBin); i += 9 {
@@ -336,7 +345,14 @@ func Decompress(filePath string) (*strings.Builder, error) {
 		bits := section[8]
 		ht.addNode(char, code, bits)
 	}
-	fmt.Println("Decoding body using built tree above")
+	// fmt.Println("Extracting number of padded 0s")
+	paddedZeros, err := buf.ReadByte()
+	if err != nil && err != io.EOF {
+		return nil, fmt.Errorf("Error extracting padded 0s: %w", err)
+	}
+	fmt.Printf("Extracted number of padded 0s: %d\n", paddedZeros)
+
+	// fmt.Println("Decoding body using built tree above")
 	walk := ht.walker()
 	for {
 		bodyBin, err := buf.ReadByte()
@@ -347,7 +363,14 @@ func Decompress(filePath string) (*strings.Builder, error) {
 			return nil, fmt.Errorf("Error decoding body: %w", err)
 		}
 
-		for i := 7; i >= 0; i-- {
+		var endByte int
+		if buf.Len() == 0 {
+			endByte = int(paddedZeros)
+		} else {
+			endByte = 0
+		}
+
+		for i := 7; i >= endByte; i-- {
 			bit := (bodyBin >> uint(i)) & 1
 			v, ok := walk(int(bit))
 			if ok {
