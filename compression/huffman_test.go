@@ -121,13 +121,18 @@ func TestCompressDecompress_200MB(t *testing.T) {
 	roundTripCheck(t, text)
 }
 
+func TestCompressDecompress_500MB(t *testing.T) {
+	t.Skip("Skip by default. Run manually when needed.")
+	text := strings.Repeat("GoLangCompressionStressTest!", 17_800_000) // ~500MB
+	roundTripCheck(t, text)
+}
+
 func writeTempFile(t *testing.T, content string) string {
 	tmp, err := os.CreateTemp("", "original_*.txt")
 	if err != nil {
 		t.Fatalf("failed to create temp file: %v", err)
 	}
 	defer tmp.Close()
-
 	_, err = tmp.Write([]byte(content))
 	if err != nil {
 		t.Fatalf("failed to write to temp file: %v", err)
@@ -137,27 +142,22 @@ func writeTempFile(t *testing.T, content string) string {
 
 func roundTripCheck(t *testing.T, input string) {
 	t.Helper()
-
 	inputPath := writeTempFile(t, input)
 	defer os.Remove(inputPath)
-
 	compressed, err := Compress(inputPath)
 	if err != nil {
 		t.Fatalf("compress failed: %v", err)
 	}
-
 	compressedPath := inputPath + ".kn"
 	err = os.WriteFile(compressedPath, compressed.Bytes(), 0644)
 	if err != nil {
 		t.Fatalf("writing compressed file failed: %v", err)
 	}
 	defer os.Remove(compressedPath)
-
 	output, err := Decompress(compressedPath)
 	if err != nil {
 		t.Fatalf("decompress failed: %v", err)
 	}
-
 	if output.String() != input {
 		t.Errorf("expected '%s', got '%s'", input, output.String())
 	}
