@@ -190,11 +190,11 @@ func roundTripCheck(t *testing.T, input string) {
 		t.Fatalf("writing compressed file failed: %v", err)
 	}
 	defer os.Remove(compressedPath)
-	// output, err := Decompress(compressedPath)
-	// if err != nil {
-	// 	t.Fatalf("decompress failed: %v", err)
-	// }
-	// if output.String() != input {
-	// 	t.Errorf("expected '%s', got '%s'", input, output.String())
-	// }
+	output, err := Decompress(compressedPath)
+	if err != nil {
+		t.Fatalf("decompress failed: %v", err)
+	}
+	if output.String() != input {
+		t.Errorf("expected '%s', got '%s'", input, output.String())
+	}
 }
