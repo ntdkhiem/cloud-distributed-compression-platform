@@ -344,7 +344,7 @@ func Compress(filePath string) (*bytes.Buffer, error) {
 		bodyBin := make([]byte, 4)
 		binary.LittleEndian.PutUint32(bodyBin, uint32(c.Len()))
 		compressData.Write(bodyBin)
-		fmt.Println("Write 4 byte of body length to compressData")
+		fmt.Println("Write 4 bytes of body length to compressData")
 		n, err = c.WriteTo(&compressData)
 		if err != nil {
 			return nil, fmt.Errorf("Error writing body: %w", err)
@@ -354,6 +354,31 @@ func Compress(filePath string) (*bytes.Buffer, error) {
 
 	fmt.Printf("Total: %d bytes\n", compressData.Len())
 	return &compressData, nil
+}
+
+func decompressChunk(paddedZeros int, chunk []byte, table *node) *strings.Builder {
+	var result strings.Builder
+
+	walk := table.walker()
+	for i, c := range chunk {
+		var endByte int
+		if i+1 == len(chunk) {
+			// padded zeros situation
+			endByte = paddedZeros
+		} else {
+			endByte = 0
+		}
+
+		for i := 7; i >= endByte; i-- {
+			bit := (c >> uint(i)) & 1
+			v, ok := walk(int(bit))
+			if ok {
+				result.WriteRune(rune(v))
+				walk = table.walker()
+			}
+		}
+	}
+	return &result
 }
 
 func Decompress(filePath string) (*strings.Builder, error) {
@@ -397,17 +422,20 @@ func Decompress(filePath string) (*strings.Builder, error) {
 		ht.addNode(char, code, bits)
 	}
 
-	walk := ht.walker()
+	var chunks [][]byte
+	var paddedZeros []int
 	for {
+
 		// extracting padded zeros section
-		paddedZeros, err := buf.ReadByte()
+		paddedZero, err := buf.ReadByte()
 		if err != nil {
 			if err == io.EOF {
 				break
 			}
 			return nil, fmt.Errorf("Error extracting padded 0s: %w", err)
 		}
-		fmt.Printf("Extracted number of padded 0s: %d\n", paddedZeros)
+		fmt.Printf("Extracted number of padded 0s: %d\n", paddedZero)
+		paddedZeros = append(paddedZeros, int(paddedZero))
 		// extracting body length section
 		bodyBin := make([]byte, 4)
 		_, err = buf.Read(bodyBin)
@@ -415,30 +443,55 @@ func Decompress(filePath string) (*strings.Builder, error) {
 			return nil, fmt.Errorf("Error extracting body length: %w", err)
 		}
 		bodyLen := binary.LittleEndian.Uint32(bodyBin)
-		for i := range bodyLen {
-			b, err := buf.ReadByte()
-			if err != nil {
-				return nil, fmt.Errorf("Error decoding body: %w", err)
-			}
 
-			var endByte int
-			if i+1 == bodyLen {
-				// padded zeros situation
-				endByte = int(paddedZeros)
-			} else {
-				endByte = 0
-			}
-
-			for i := 7; i >= endByte; i-- {
-				bit := (b >> uint(i)) & 1
-				v, ok := walk(int(bit))
-				if ok {
-					decompText.WriteRune(rune(v))
-					walk = ht.walker()
-				}
-			}
+		bodyContent := make([]byte, bodyLen)
+		_, err = buf.Read(bodyContent)
+		if err != nil {
+			return nil, fmt.Errorf("Error extracting body content: %w", err)
 		}
+		chunks = append(chunks, bodyContent)
+		// for i := range bodyLen {
+		// 	b, err := buf.ReadByte()
+		// 	if err != nil {
+		// 		return nil, fmt.Errorf("Error decoding body: %w", err)
+		// 	}
+		//
+		// 	var endByte int
+		// 	if i+1 == bodyLen {
+		// 		// padded zeros situation
+		// 		endByte = int(paddedZeros)
+		// 	} else {
+		// 		endByte = 0
+		// 	}
+		//
+		// 	for i := 7; i >= endByte; i-- {
+		// 		bit := (b >> uint(i)) & 1
+		// 		v, ok := walk(int(bit))
+		// 		if ok {
+		// 			decompText.WriteRune(rune(v))
+		// 			walk = ht.walker()
+		// 		}
+		// 	}
+		// }
 	}
+
+	var wg sync.WaitGroup
+	decompressTextLst := make([]*strings.Builder, len(paddedZeros))
+	for i, chunk := range chunks {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			d := decompressChunk(int(paddedZeros[i]), chunk, &ht)
+			decompressTextLst[idx] = d
+		}(i)
+	}
+	wg.Wait()
+
+	// merge all back into one
+	for _, s := range decompressTextLst {
+		decompText.WriteString(s.String())
+	}
+
 	fmt.Printf("Text size: %d bytes\n", decompText.Len())
 	return &decompText, nil
 }
