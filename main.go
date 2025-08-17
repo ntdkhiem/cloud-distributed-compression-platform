@@ -39,11 +39,11 @@ func main() {
 			fmt.Println("Error: ", err)
 			return
 		}
-		err = os.WriteFile(*outputFlagPtr+".kn", payload.Bytes(), 0644)
+		err = os.WriteFile(*outputFlagPtr+".ranran", payload.Bytes(), 0644)
 		if err != nil {
 			fmt.Println("Failed to write file: ", err)
 			return
 		}
-		fmt.Println("File written successfully to", *outputFlagPtr+".kn")
+		fmt.Println("File written successfully to", *outputFlagPtr+".ranran")
 	}
 }
