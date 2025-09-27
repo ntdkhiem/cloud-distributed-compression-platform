@@ -1,4 +1,4 @@
-# Cloud Distributed Compression Platform
+# Distributed Compression as a Service
 > [!TIP]
 > To keep myself responsible, I document my journey developing this project from scratch on so...  
 > [FOLLOW MY CODING JOURNEY HERE](https://www.youtube.com/playlist?list=PLSg4pGV1EkBo1JCfXl4zZoHkbFe4zk_EL)
