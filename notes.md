@@ -23,7 +23,7 @@ already have the foundation.
 # COMPRESSED STRUCTURE 
 ====
 
-## Before distributed compressing
+## Before "distributed" compressing
 a (uint16: 2 bytes) -> length of header.
 b (uint32: 4 bytes) -> symbol in binary form.
 c (string: 4 bytes) -> Huffman assigned code.
@@ -33,7 +33,7 @@ f (byte: 1 byte) -> a segment of the body.
 structure: a + [(b + c + d)...] + e + [f...]
 EX: 500MB file takes ~45s to compress.
 
-## After distributed compressing
+## After "distributed" compressing
 a (uint16: 2 bytes) -> length of header.
 b (uint32: 4 bytes) -> symbol in binary form.
 c (string: 4 bytes) -> Huffman assigned code.
@@ -49,4 +49,62 @@ RESULT:
 - with splitting into chunks, the efficiency is only ~30% faster. I will go ahead with this 
 implementation anyway because why not...
 - (SOLVED) the challenge right now is how do I decompress this... (NICEEEEE!)
-- NEXT: use goroutines on decompression
+- (SOLVED) use goroutines on decompression
+
+## Next: create HTTP client and server
+======
+### FIRST REVISION
+---
+### client
+takes in text file, split into CHUNKS if size >= 500MB. Passes to the server one by one.
+- get frequency table from the file to be sent to the server. Once confirmed from server, start 
+splitting into chunks to send over the server.  
+
+- define a route /upload that accepts POST method
+- when a user submits a text file in this route, it will validate the file's extension.
+- request for a unique ID from the server.
+- build a frequency table of unique characters
+- send the table to the server (127.0.0.1:8080/table?id=[ID])
+- if success, divide the text file into 3 chunks if the file size is greater than 100MB.
+- send each chunk to the server sequentially (FUTURE: in parallel)  
+
+- session affinity? memory db? 
+- latency? throughput?
+
+### server
+takes in each chunk or entire chunk, create frequency table, only starts building the tree once has received all. 
+- returns status 200.
+- include a temp link to track progress?
+
++ how do I know when the compression/decompression work is running/finished?
++ how do I ensure the chunks being sent are associated to a particular file?
++ how can the server respond back to the caller? no need?
++ if the server is a managed instance of stateless VMs, or cluster of stateless containers, how do I 
+ensure the chunks are distributed evenly and still able to merge into one whole?
++ (future) after a request failed to process, how do I ensure the lost chunks can still be sent after?
++ (far far future) CAP theorem.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
