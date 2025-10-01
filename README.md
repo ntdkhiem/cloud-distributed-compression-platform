@@ -1,11 +1,13 @@
-# Cloud Distributed Compression Platform
+# Distributed Compression as a Service
+> [!TIP]
+> To keep myself responsible, I document my journey developing this project from scratch on so...  
+> [FOLLOW MY CODING JOURNEY HERE](https://www.youtube.com/playlist?list=PLSg4pGV1EkBo1JCfXl4zZoHkbFe4zk_EL)
+ 
 _As a complete noob in Cloud, this is a challenge for myself to learn everything by building an enterprise-scale cool thing from the ground up using Go._
 
 A cloud‑native distributed compression platform that splits large files into chunks, compresses them in parallel across a cluster of worker nodes, and seamlessly merges the results. 
 
 _Inspired by Silicon Valley series and [codingchallenges.fyi](https://codingchallenges.fyi/challenges/challenge-huffman) :)_
-
-[Youtube Code-Along](https://www.youtube.com/playlist?list=PLSg4pGV1EkBo1JCfXl4zZoHkbFe4zk_EL)
 
 # TODO
 - [X] Develop Huffman's algorithm to be used for lossless data compression.
