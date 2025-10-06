@@ -51,9 +51,9 @@ implementation anyway because why not...
 - (SOLVED) the challenge right now is how do I decompress this... (NICEEEEE!)
 - (SOLVED) use goroutines on decompression
 
-## Next: create HTTP client and server
+# Next: create HTTP client and server
 ======
-### FIRST REVISION
+## FIRST REVISION
 ---
 ### client
 takes in text file, split into CHUNKS if size >= 500MB. Passes to the server one by one.
@@ -84,6 +84,16 @@ ensure the chunks are distributed evenly and still able to merge into one whole?
 + (future) after a request failed to process, how do I ensure the lost chunks can still be sent after?
 + (far far future) CAP theorem.
 
+## SECOND REVISION
+---
+### manager
+- takes in text file, build character frequency table, assign incoming request with UID.
+- send the table along with UID to the worker for Huffman tree building
+* this will be another service called Huffman Tree Coordinator or just coordinator.
+    - more than one worker can reference their tree with assigned UID to this service.
+
+### worker
+- mainly building header, body, and send back the result
 
 
 
