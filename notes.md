@@ -20,6 +20,11 @@ anyway.
 Verdict: let's go with the second solution because it seems to be easier to implement since we 
 already have the foundation.
 
+How to run: 
+- create GOOGLE_APPLICATION_CREDENTIALS env 
+https://cloud.google.com/docs/authentication/application-default-credentials#GAC
+- create GCS_BUCKET env
+
 # COMPRESSED STRUCTURE 
 ====
 
@@ -95,6 +100,47 @@ ensure the chunks are distributed evenly and still able to merge into one whole?
 ### worker
 - mainly building header, body, and send back the result
 
+### Flaws
+- the issue with manager holding the entire file content in the memory while building character
+frequency table is the potential significant amount of memory that can cause memory overflow, DoS,
+- an enterprise-scale application should be able to handle gigabytes of memory in the most efficient
+way.
+- right now, the communication line between manager and worker is synchronous so there are some blocking
+calls somewhere during the interaction. I should find a way to delegate these asynchronously.
+- if worker is the one storing chunks of data while building the huffman tree and compress the data,
+what if the worker fails? it will lose everything and wouldn't be possible to recover the work.
+- this stateful tracking of workers and managers can make horizontal scaling very complex and inefficient.
+- i think I should start optimize for scalability now before wasting more time developing this "two-form" 
+monolithic.
+- FUTURE WORK: implement retries.
+
+## THIRD REVISION
+---
+what if instead of having the manager handling data content in memory, I can delegate that to a 
+robust data storage like Google Cloud Storage? 
+what if instead of having the synchronous communication line, I can use a dedicated communication 
+orchestrator, a message queue like Redis.
+
+### manager
+- receives the file upload from the client.
+- streams content directly to GCS while simultaneously calculating the character freq. table on-the-fly.
+Keep the memory footprint small.
+- once the upload is complete and the table is built, manager should upload to GCS under the same job ID 
+so the worker can retrieve later.
+- sends a message to MQ with job's id, object's path, table's path.
+- immediately returns 202 code with job's id.
+
+### worker 
+- the worker should be the consumer of the MQ, listening for new job message.
+- once receives the message, parses the content.
+- downloads frequency table to build the huffman tree
+- download/stream? the original file from GCS, in chunks (1MB?)
+- for each chunk, compress using Huffman and uploads back to GCS
+(can I do this if the chunks split the bits of a character?)
+- after processing all chunks, compress all parts into one.
+
+BENEFITS: scalability, jobs won't get lost if workers die, low memory footprint
+DRAWBACKS: infrastructure cost, more complexity
 
 
 

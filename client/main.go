@@ -2,7 +2,9 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -51,17 +53,41 @@ func (app *Application) uploadHandler(w http.ResponseWriter, r *http.Request) {
 	defer file.Close()
 
 	jobID := uuid.New().String()
-	log.Printf("Processing new job %s for file %s", jobID, header.Filename)
+	log.Printf("INFO: Processing new job %s for file %s", jobID, header.Filename)
 
 	// create a pipe to simultaneously building char. req. table while streaming content to GCS
-	// pr, pw := io.Pipe()
+	pr, pw := io.Pipe()
+
+	freqTable := make(map[rune]uint64)
+	teeReader := io.TeeReader(file, pw)
+
+	go func() {
+		defer pw.Close()
+		bufReader := bufio.NewReader(teeReader)
+		for {
+			// ReadRune() reads a single UTF-8 encoded Unicode character (a rune).
+			char, _, err := bufReader.ReadRune()
+			if err != nil {
+				// If we've reached the end of the file, we're done.
+				if err == io.EOF {
+					break
+				}
+				// Otherwise, it's a real error.
+				// TODO: how do I return this error as internal error from go routine?
+				log.Printf("ERROR: failed to read file to build freq. table: %v", err)
+				return
+			}
+			// Increment the count for the character.
+			freqTable[char]++
+		}
+	}()
 
 	ctx, cancel := context.WithTimeout(*app.CTX, time.Second*50)
 	defer cancel()
 
 	originalFilePath := fmt.Sprintf("%s/original_%s", jobID, header.Filename)
 	wc := app.GCSClient.Bucket(app.Bucket).Object(originalFilePath).NewWriter(ctx)
-	if _, err := io.Copy(wc, file); err != nil {
+	if _, err := io.Copy(wc, pr); err != nil {
 		log.Printf("ERROR: failed to stream data to GCS: %v", err)
 		writeError(w, "Failed to upload data to server: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -73,12 +99,26 @@ func (app *Application) uploadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("Uploaded %s to GCS", header.Filename)
 
-	// frequencyTable, err := calculateFrequencyFromStream(file)
-	// if err != nil {
-	// 	log.Printf("ERROR: failed to process file stream: %v", err)
-	// 	writeError(w, "Could not process file content", http.StatusInternalServerError)
-	// 	return
-	// }
+	freqTableBytes, err := json.Marshal(freqTable)
+	if err != nil {
+		log.Printf("ERROR: failed to marshal frequency table for job %s: %v", jobID, err)
+		writeError(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	freqTablePath := fmt.Sprintf("%s/frequency_table.json", jobID)
+	wc = app.GCSClient.Bucket(app.Bucket).Object(freqTablePath).NewWriter(ctx)
+	if _, err := io.Copy(wc, bytes.NewReader(freqTableBytes)); err != nil {
+		log.Printf("ERROR: failed to stream frequency table to GCS: %v", err)
+		writeError(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	if err := wc.Close(); err != nil {
+		log.Printf("ERROR: failed to close frequency table data stream to GCS: %v", err)
+		writeError(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	log.Printf("Uploaded frequency table for job %s to GCS", jobID)
 
 	// w.Header().Set("Content-Type", "application/json")
 	// w.WriteHeader(http.StatusOK)
@@ -114,27 +154,26 @@ func (app *Application) uploadHandler(w http.ResponseWriter, r *http.Request) {
 // 	return true
 // }
 
-func calculateFrequencyFromStream(reader io.Reader) (map[string]int, error) {
-	frequency := make(map[string]int)
-	// Create a buffered reader to efficiently read rune by rune.
-	bufReader := bufio.NewReader(reader)
-
-	for {
-		// ReadRune() reads a single UTF-8 encoded Unicode character (a rune).
-		char, _, err := bufReader.ReadRune()
-		if err != nil {
-			// If we've reached the end of the file, we're done.
-			if err == io.EOF {
-				break
-			}
-			// Otherwise, it's a real error.
-			return nil, err
-		}
-		// Increment the count for the character.
-		frequency[string(char)]++
-	}
-	return frequency, nil
-}
+// func calculateFrequencyFromStream(reader io.Reader) (map[string]int, error) {
+// 	frequency := make(map[string]int)
+// 	// Create a buffered reader to efficiently read rune by rune.
+// 	bufReader := bufio.NewReader(reader)
+// 	for {
+// 		// ReadRune() reads a single UTF-8 encoded Unicode character (a rune).
+// 		char, _, err := bufReader.ReadRune()
+// 		if err != nil {
+// 			// If we've reached the end of the file, we're done.
+// 			if err == io.EOF {
+// 				break
+// 			}
+// 			// Otherwise, it's a real error.
+// 			return nil, err
+// 		}
+// 		// Increment the count for the character.
+// 		frequency[string(char)]++
+// 	}
+// 	return frequency, nil
+// }
 
 // func processFile(path string) (map[rune]int, []string, error) {
 // 	file, err := os.Open(path)
