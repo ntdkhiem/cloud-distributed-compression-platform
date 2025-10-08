@@ -119,7 +119,7 @@ monolithic.
 what if instead of having the manager handling data content in memory, I can delegate that to a 
 robust data storage like Google Cloud Storage? 
 what if instead of having the synchronous communication line, I can use a dedicated communication 
-orchestrator, a message queue like Redis.
+orchestrator, a message queue like Redis, use Pub/Sub.
 
 ### manager
 - receives the file upload from the client.
@@ -128,10 +128,12 @@ Keep the memory footprint small.
 - once the upload is complete and the table is built, manager should upload to GCS under the same job ID 
 so the worker can retrieve later.
 - sends a message to MQ with job's id, object's path, table's path.
+    - publishes a message to Pub/Sub with predefined schema
 - immediately returns 202 code with job's id.
 
 ### worker 
 - the worker should be the consumer of the MQ, listening for new job message.
+    - follow Pub/Sub created subscription model.
 - once receives the message, parses the content.
 - downloads frequency table to build the huffman tree
 - download/stream? the original file from GCS, in chunks (1MB?)
@@ -140,8 +142,16 @@ so the worker can retrieve later.
 - after processing all chunks, compress all parts into one.
 
 BENEFITS: scalability, jobs won't get lost if workers die, low memory footprint
-DRAWBACKS: infrastructure cost, more complexity
+DRAWBACKS: infrastructure cost, more complexity, what happens if multiple workers receive same 
+message at the same time?
 
+#### Work
+- streamed file content to GCS
+- streamed character frequency table to GCS
+- created topic
+- created pull subscription model
+- added publisher, subscriber roles to service account
+- published a message to topic
 
 
 
