@@ -38,7 +38,7 @@ func (app *Application) uploadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// set request body size limit
+	// set request body size limit (1GB for now)
 	// TODO: increase the limit through any means (the whole point of the program)
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<30)
 

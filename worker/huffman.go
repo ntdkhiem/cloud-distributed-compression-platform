@@ -1,8 +1,13 @@
 package main
 
 import (
+	"bufio"
 	"container/heap"
+	"encoding/binary"
+	"fmt"
+	"io"
 	"log"
+	"strconv"
 )
 
 type lookupItem struct {
@@ -100,4 +105,52 @@ func buildHuffmanTree(freqTable map[rune]uint64) (priorityQueue, error) {
 	buildTree(pq[0], "", 0)
 	log.Printf("INFO: built Huffman Tree")
 	return pq, nil
+}
+
+func buildHeader(root *node, w *io.PipeWriter) error {
+	if root == nil {
+		return nil
+	}
+	item := root.value
+	if item.char != 0 {
+		data := make([]byte, 9)
+		// first four bytes: character code
+		binary.LittleEndian.PutUint32(data[:4], uint32(item.char))
+		// next four bytes: Huffman assigned code
+		// WARNING: Huffman codes can be longer than 32 bits in some implementations, but for
+		// simplicity, I force it to be <= 32 bits.
+		v, err := strconv.ParseUint(item.code, 2, 32)
+		if err != nil {
+			return err
+		}
+		smallV := uint32(v)
+		binary.LittleEndian.PutUint32(data[4:8], smallV)
+		// last byte: bits
+		data[8] = byte(item.bits)
+		// write to pipe
+		if _, err := w.Write(data); err != nil {
+			return fmt.Errorf("Failed to write bytes to header: %w", err)
+		}
+	}
+	if err := buildHeader(root.left, w); err != nil {
+		return err
+	}
+	if err := buildHeader(root.right, w); err != nil {
+		return err
+	}
+	return nil
+}
+
+func compress(root *node, data *bufio.Reader, w *io.PipeWriter) {
+
+	err := buildHeader(root, w)
+	if err != nil {
+		log.Printf("ERROR: failed to build header: %v", err)
+		return
+	}
+	// return &header, err
+	// header, err := buildHeader(pq[0])
+	// if err != nil {
+	// 	return nil, fmt.Errorf("Error building header: %w", err)
+	// }
 }

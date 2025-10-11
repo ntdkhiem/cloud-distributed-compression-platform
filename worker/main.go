@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"log"
 	"os"
 	"time"
@@ -24,17 +27,6 @@ type pubsubMessageSchema struct {
 	UID              string `json:"UID"`
 	OriginalFilePath string `json:"OriginalFilePath"`
 	FreqTablePath    string `json:"FreqTablePath"`
-}
-
-type huffmanRequest struct {
-	UID            string         `json:"uid"`
-	FrequencyTable map[string]int `json:"frequency_table"`
-}
-
-type treeResponse struct {
-	Message   string `json:"message"`
-	UID       string `json:"uid"`
-	Timestamp string `json:"timestamp"`
 }
 
 func (app *Application) messageHandler(_ context.Context, msg *pubsub.Message) {
@@ -75,19 +67,39 @@ func (app *Application) messageHandler(_ context.Context, msg *pubsub.Message) {
 	}
 	log.Printf("INFO: built Huffman Tree: %v", huffmanTree[0].value.char)
 
-	// w.Header().Set("Content-Type", "application/json")
-	// w.WriteHeader(http.StatusAccepted)
-	//
-	// response := treeResponse{
-	// 	Message:   "Request accepted. Huffman tree building process initiated.",
-	// 	UID:       requestPayload.UID,
-	// 	Timestamp: time.Now().UTC().Format(time.RFC3339),
-	// }
-	//
-	// if err := json.NewEncoder(w).Encode(response); err != nil {
-	// 	log.Printf("ERROR: failed to write success response for /tree: %v", err)
-	// }
+	// stream file content down and compress
+	ogFileBytes, err := app.GCSClient.Bucket(app.Bucket).Object(job.OriginalFilePath).NewReader(ctx)
+	if err != nil {
+		log.Printf("ERROR: failed to download original file content from job %s: %v", job.UID, err)
+		msg.Nack()
+		return
+	}
+	defer ogFileBytes.Close()
+
+	pr, pw := io.Pipe()
+
+	go func() {
+		defer pw.Close()
+		compress(huffmanTree[0], bufio.NewReader(ogFileBytes), pw)
+		log.Printf("DEBUG: ")
+	}()
+
+	compressedFilePath := fmt.Sprintf("%s/compressed.ranran", job.UID)
+	wc := app.GCSClient.Bucket(app.Bucket).Object(compressedFilePath).NewWriter(ctx)
+	if _, err := io.Copy(wc, pr); err != nil {
+		log.Printf("ERROR: failed to stream compressed data to GCS: %v", err)
+		msg.Nack()
+		return
+	}
+	if err := wc.Close(); err != nil {
+		log.Printf("ERROR: failed to close data stream to GCS: %v", err)
+		msg.Nack()
+		return
+	}
+	log.Printf("INFO: Uploaded compressed data from job %s to GCS", job.UID)
+
 	msg.Ack()
+	log.Printf("INFO: completed processing job %s", job.UID)
 }
 
 func main() {

@@ -152,7 +152,15 @@ message at the same time?
 - created pull subscription model
 - added publisher, subscriber roles to service account
 - published a message to topic
+- worker pulled message and built huffman coding tree
+- why am I using streaming?
 
+
+worker: downloads file content down and compresses it while simultaneously writes it 
+to another Reader.
+- will this overload the worker if the file is more than say 100MB?
+- what's the latency? throughput?
+- alternative? stream in trunks? how?
 
 
 
