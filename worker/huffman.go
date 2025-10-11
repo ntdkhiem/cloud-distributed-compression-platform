@@ -7,7 +7,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"log"
 	"strconv"
 )
 
@@ -87,7 +86,6 @@ func buildHuffmanTree(freqTable map[rune]uint64) (priorityQueue, prefixTable, er
 		i++
 	}
 	heap.Init(&pq)
-	log.Printf("INFO: built prefix table")
 
 	for pq.Len() > 1 {
 		n1 := heap.Pop(&pq).(*node)
@@ -105,9 +103,7 @@ func buildHuffmanTree(freqTable map[rune]uint64) (priorityQueue, prefixTable, er
 		}
 		heap.Push(&pq, &newnode)
 	}
-	log.Printf("INFO: built priority queue")
 	buildTree(pq[0], "", 0)
-	log.Printf("INFO: built Huffman Tree")
 	return pq, pt, nil
 }
 
@@ -145,25 +141,22 @@ func buildHeader(root *node, w *bytes.Buffer) error {
 	return nil
 }
 
-func compress(root *node, pt prefixTable, bodyData *bufio.Reader, w *io.PipeWriter) {
+func compress(root *node, pt prefixTable, bodyData *bufio.Reader, w *io.PipeWriter) error {
 	var headerBuffer bytes.Buffer
 	err := buildHeader(root, &headerBuffer)
 	if err != nil {
-		log.Printf("ERROR: failed to build header: %v", err)
-		return
+		return fmt.Errorf("Failed to build header: %v", err)
 	}
 	headerLen := make([]byte, 2)
 	binary.LittleEndian.PutUint16(headerLen, uint16(headerBuffer.Len()))
 	_, err = w.Write(headerLen)
 	if err != nil {
-		log.Printf("ERROR: failed to write length header: %v", err)
+		return fmt.Errorf("Failed to write length header: %v", err)
 	}
 	_, err = headerBuffer.WriteTo(w)
 	if err != nil {
-		log.Printf("ERROR: failed to write header content: %v", err)
-		return
+		return fmt.Errorf("Failed to write header content: %v", err)
 	}
-	// log.Printf("Write %d bytes of header.", n)
 
 	// write body
 	var currentByte byte
@@ -176,8 +169,7 @@ func compress(root *node, pt prefixTable, bodyData *bufio.Reader, w *io.PipeWrit
 				break
 			}
 			// Otherwise, it's a real error.
-			log.Printf("ERROR: failed to read file to build freq. table: %v", err)
-			return
+			return fmt.Errorf("failed to read file to build freq. table: %v", err)
 		}
 		item := pt[char]
 		for _, bit := range item.code {
@@ -201,4 +193,5 @@ func compress(root *node, pt prefixTable, bodyData *bufio.Reader, w *io.PipeWrit
 		currentByte <<= paddedZeros  // shift remaining bits to fill the byte
 		w.Write([]byte{currentByte}) // TODO: find out the drawbacks of this.
 	}
+	return nil
 }

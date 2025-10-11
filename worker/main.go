@@ -7,8 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"os"
+	"strconv"
 	"time"
 
 	"cloud.google.com/go/pubsub/v2"
@@ -33,12 +34,12 @@ type pubsubMessageSchema struct {
 func (app *Application) messageHandler(_ context.Context, msg *pubsub.Message) {
 	var job pubsubMessageSchema
 	if err := json.Unmarshal(msg.Data, &job); err != nil {
-		log.Printf("ERROR: failed to unmarshal body from job message: %v", err)
+		slog.Error("Failed to unmarshal body from job message", "error", err)
 		msg.Nack()
 		return
 	}
 
-	log.Printf("INFO: received job %s", job.UID)
+	slog.Info("Received job", "job", job.UID)
 
 	// Download character frequency table from GCS
 	ctx, cancel := context.WithTimeout(*app.CTX, time.Second*50)
@@ -46,7 +47,7 @@ func (app *Application) messageHandler(_ context.Context, msg *pubsub.Message) {
 
 	freqTableBytes, err := app.GCSClient.Bucket(app.Bucket).Object(job.FreqTablePath).NewReader(ctx)
 	if err != nil {
-		log.Printf("ERROR: failed to download character frequency table from job %s: %v", job.UID, err)
+		slog.Error("Failed to download character frequency table", "job", job.UID, "error", err)
 		msg.Nack()
 		return
 	}
@@ -54,24 +55,24 @@ func (app *Application) messageHandler(_ context.Context, msg *pubsub.Message) {
 
 	var freqTable map[rune]uint64
 	if err := json.NewDecoder(freqTableBytes).Decode(&freqTable); err != nil {
-		log.Printf("ERROR: failed to decode character frequency table from job %s: %v", job.UID, err)
+		slog.Error("Failed to decode character frequency table", "job", job.UID, "error", err)
 		msg.Nack()
 		return
 	}
-	log.Printf("INFO: downloaded character frequency table from job %s", job.UID)
+	slog.Debug("Downloaded character frequency table", "job", job.UID)
 
 	huffmanTree, prefixTable, err := buildHuffmanTree(freqTable)
 	if err != nil {
-		log.Printf("ERROR: failed to HuffmanTree for job %s: %v", job.UID, err)
+		slog.Error("Failed to HuffmanTree", "job", job.UID, "error", err)
 		msg.Nack()
 		return
 	}
-	log.Printf("INFO: built Huffman Tree: %v", huffmanTree[0].value.char)
+	slog.Debug("Built Huffman Tree", "job", job.UID)
 
 	// stream file content down and compress
 	ogFileBytes, err := app.GCSClient.Bucket(app.Bucket).Object(job.OriginalFilePath).NewReader(ctx)
 	if err != nil {
-		log.Printf("ERROR: failed to download original file content from job %s: %v", job.UID, err)
+		slog.Error("Failed to download original file content", "job", job.UID, "error", err)
 		msg.Nack()
 		return
 	}
@@ -81,28 +82,44 @@ func (app *Application) messageHandler(_ context.Context, msg *pubsub.Message) {
 
 	go func() {
 		defer pw.Close()
-		compress(huffmanTree[0], prefixTable, bufio.NewReader(ogFileBytes), pw)
+        err := compress(huffmanTree[0], prefixTable, bufio.NewReader(ogFileBytes), pw)
+        if err != nil {
+            slog.Error("Failed to compress", "job", job.UID, "error", err)
+            msg.Nack()
+            return
+        }
 	}()
 
 	compressedFilePath := fmt.Sprintf("%s/compressed.ranran", job.UID)
 	wc := app.GCSClient.Bucket(app.Bucket).Object(compressedFilePath).NewWriter(ctx)
 	if _, err := io.Copy(wc, pr); err != nil {
-		log.Printf("ERROR: failed to stream compressed data to GCS: %v", err)
+		slog.Error("Failed to stream compressed data to GCS", "job", job.UID, "error", err)
 		msg.Nack()
 		return
 	}
 	if err := wc.Close(); err != nil {
-		log.Printf("ERROR: failed to close data stream to GCS: %v", err)
+		slog.Error("Failed to close data stream to GCS", "job", job.UID, "error", err)
 		msg.Nack()
 		return
 	}
-	log.Printf("INFO: Uploaded compressed data from job %s to GCS", job.UID)
+	slog.Debug("Uploaded compressed data to GCS", "job", job.UID)
 
 	msg.Ack()
-	log.Printf("INFO: completed processing job %s", job.UID)
+	slog.Info("Completed processing job", "job", job.UID)
 }
 
 func main() {
+	// initialize logging system
+	var programLevel = new(slog.LevelVar) // Info by default
+	developmentMode := os.Getenv("DEVELOPMENT_MODE")
+	isDev, err := strconv.ParseBool(developmentMode)
+	if err == nil && isDev {
+		programLevel.Set(slog.LevelDebug)
+	}
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: programLevel}))
+	slog.SetDefault(logger)
+
+	// initialize GCP services
 	projectID := os.Getenv("GCP_PROJECT_ID")
 	topicID := os.Getenv("PUBSUB_TOPIC_ID")
 	subID := os.Getenv("PUBSUB_SUB_ID")
@@ -111,19 +128,19 @@ func main() {
 
 	GCSClient, err := storage.NewClient(ctx)
 	if err != nil {
-		log.Printf("ERROR: Cannot create new client for GCS: %v", err)
+		slog.Error("Cannot create new client for GCS", "error", err)
 		return
 	}
 	defer GCSClient.Close()
-	log.Printf("INFO: Initialized a GCS client.")
+	slog.Debug("Initialized a GCS client.")
 
 	PUBSUBClient, err := pubsub.NewClient(ctx, projectID)
 	if err != nil {
-		log.Printf("ERROR: Cannot create new client for Pub/Sub: %v", err)
+		slog.Error("Cannot create new client for Pub/Sub", "error", err)
 		return
 	}
 	defer PUBSUBClient.Close()
-	log.Printf("INFO: Initialized a Pub/Sub client.")
+	slog.Debug("Initialized a Pub/Sub client.")
 
 	app := Application{
 		GCSClient:    GCSClient,
@@ -135,11 +152,11 @@ func main() {
 
 	sub := PUBSUBClient.Subscriber(subID)
 
-	log.Printf("INFO: Listening for a new message...")
+	slog.Info("Listening for a new message...")
 	// TODO: use context.WithCancel if fail to process during Receive
 	err = sub.Receive(ctx, app.messageHandler)
 	if err != nil && !errors.Is(err, context.Canceled) {
-		log.Printf("ERROR: cannot process job: %v", err)
+		slog.Error("Cannot process job", "error", err)
 		return
 	}
 }

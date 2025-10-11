@@ -7,9 +7,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"cloud.google.com/go/pubsub/v2"
@@ -44,14 +45,16 @@ func (app *Application) uploadHandler(w http.ResponseWriter, r *http.Request) {
 
 	file, header, err := r.FormFile("file")
 	if err != nil {
-		log.Printf("ERROR: failed to get file from form: %v", err)
+		slog.Error("Failed to get file from form", "error", err)
 		writeError(w, "Failed to read file: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 	defer file.Close()
 
+    slog.Info("Processing a request for compressing")
+
 	jobID := uuid.New().String()
-	log.Printf("INFO: Processing new job %s for file %s", jobID, header.Filename)
+	slog.Debug("Creating new job", "job", jobID, "file", header.Filename)
 
 	// create a pipe to simultaneously building char. req. table while streaming content to GCS
 	pr, pw := io.Pipe()
@@ -72,7 +75,7 @@ func (app *Application) uploadHandler(w http.ResponseWriter, r *http.Request) {
 				}
 				// Otherwise, it's a real error.
 				// TODO: how do I return this error as internal error from go routine?
-				log.Printf("ERROR: failed to read file to build freq. table: %v", err)
+				slog.Error("Failed to read file to build freq. table", "job", jobID, "error", err)
 				return
 			}
 			// Increment the count for the character.
@@ -86,20 +89,20 @@ func (app *Application) uploadHandler(w http.ResponseWriter, r *http.Request) {
 	originalFilePath := fmt.Sprintf("%s/original_%s", jobID, header.Filename)
 	wc := app.GCSClient.Bucket(app.Bucket).Object(originalFilePath).NewWriter(ctx)
 	if _, err := io.Copy(wc, pr); err != nil {
-		log.Printf("ERROR: failed to stream data to GCS: %v", err)
-		writeError(w, "Failed to upload data to server: "+err.Error(), http.StatusInternalServerError)
+		slog.Error("Failed to stream data to GCS", "job", jobID, "error", err)
+		writeError(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 	if err := wc.Close(); err != nil {
-		log.Printf("ERROR: failed to close data stream to GCS: %v", err)
-		writeError(w, "Failed to upload data to server: "+err.Error(), http.StatusInternalServerError)
+		slog.Error("Failed to close data stream to GCS", "job", jobID, "error", err)
+		writeError(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
-	log.Printf("INFO: Uploaded %s to GCS", header.Filename)
+	slog.Debug(fmt.Sprintf("Uploaded %s to GCS", header.Filename), "job", jobID)
 
 	freqTableBytes, err := json.Marshal(freqTable)
 	if err != nil {
-		log.Printf("ERROR: failed to marshal frequency table for job %s: %v", jobID, err)
+		slog.Error("Failed to marshal frequency table", "job", jobID, "error", err)
 		writeError(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -107,16 +110,16 @@ func (app *Application) uploadHandler(w http.ResponseWriter, r *http.Request) {
 	freqTablePath := fmt.Sprintf("%s/frequency_table.json", jobID)
 	wc = app.GCSClient.Bucket(app.Bucket).Object(freqTablePath).NewWriter(ctx)
 	if _, err := io.Copy(wc, bytes.NewReader(freqTableBytes)); err != nil {
-		log.Printf("ERROR: failed to stream frequency table to GCS: %v", err)
+		slog.Error("Failed to stream frequency table to GCS", "job", jobID, "error", err)
 		writeError(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 	if err := wc.Close(); err != nil {
-		log.Printf("ERROR: failed to close frequency table data stream to GCS: %v", err)
+		slog.Error("Failed to close frequency table data stream to GCS", "job", jobID, "error", err)
 		writeError(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
-	log.Printf("INFO: Uploaded frequency table for job %s to GCS", jobID)
+	slog.Debug("Uploaded frequency table to GCS", "job", jobID)
 
 	// initialize new pushlisher everytime to avoid sending messages in batch.
 	publisher := app.PUBSUBClient.Publisher(app.TopicID)
@@ -127,7 +130,7 @@ func (app *Application) uploadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	messageBytes, err := json.Marshal(message)
 	if err != nil {
-		log.Printf("ERROR: failed to marshal MQ message for job %s: %v", jobID, err)
+		slog.Error("Failed to marshal MQ message", "job", jobID, "error", err)
 		writeError(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -136,11 +139,11 @@ func (app *Application) uploadHandler(w http.ResponseWriter, r *http.Request) {
 	})
 	returnedMessageID, err := result.Get(*app.CTX) // blocks until Pub/Sub returns server-generated ID or error
 	if err != nil {
-		log.Printf("ERROR: failed to send MQ message for job %s: %v", jobID, err)
+		slog.Error("Failed to send MQ message", "job", jobID, "error", err)
 		writeError(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
-	log.Printf("INFO: Sent message to Pub/Sub for job %s: %s", jobID, returnedMessageID)
+	slog.Debug("Sent message to Pub/Sub ", "job", jobID, "server_generated_message_id", returnedMessageID)
 
 	// Send 202 Accepted Code
 	w.Header().Set("Content-Type", "application/json")
@@ -149,6 +152,17 @@ func (app *Application) uploadHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+	// initialize logging system
+	var programLevel = new(slog.LevelVar) // Info by default
+	developmentMode := os.Getenv("DEVELOPMENT_MODE")
+	isDev, err := strconv.ParseBool(developmentMode)
+	if err == nil && isDev {
+		programLevel.Set(slog.LevelDebug)
+	}
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: programLevel}))
+	slog.SetDefault(logger)
+
+	// initialize GCP services
 	projectID := os.Getenv("GCP_PROJECT_ID")
 	topicID := os.Getenv("PUBSUB_TOPIC_ID")
 	bucket := os.Getenv("GCS_BUCKET")
@@ -156,19 +170,19 @@ func main() {
 
 	GCSClient, err := storage.NewClient(ctx)
 	if err != nil {
-		log.Printf("ERROR: Cannot create new client for GCS: %v", err)
+		slog.Error("Cannot create new client for GCS", "error", err)
 		return
 	}
 	defer GCSClient.Close()
-	log.Printf("Initialized a GCS client.")
+	slog.Debug("Initialized a GCS client.")
 
 	PUBSUBClient, err := pubsub.NewClient(ctx, projectID)
 	if err != nil {
-		log.Printf("ERROR: Cannot create new client for Pub/Sub: %v", err)
+		slog.Error("Cannot create new client for Pub/Sub", "error", err)
 		return
 	}
 	defer PUBSUBClient.Close()
-	log.Printf("Initialized a Pub/Sub client.")
+	slog.Debug("Initialized a Pub/Sub client.")
 
 	app := Application{
 		GCSClient:    GCSClient,
@@ -179,6 +193,6 @@ func main() {
 	}
 
 	http.HandleFunc("/upload", app.uploadHandler)
-	fmt.Println("Listening on localhost:8081...")
+	slog.Info("Listening on localhost:8081...")
 	http.ListenAndServe(":8081", nil)
 }
