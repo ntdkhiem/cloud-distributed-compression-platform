@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -59,7 +60,7 @@ func (app *Application) messageHandler(_ context.Context, msg *pubsub.Message) {
 	}
 	log.Printf("INFO: downloaded character frequency table from job %s", job.UID)
 
-	huffmanTree, err := buildHuffmanTree(freqTable)
+	huffmanTree, prefixTable, err := buildHuffmanTree(freqTable)
 	if err != nil {
 		log.Printf("ERROR: failed to HuffmanTree for job %s: %v", job.UID, err)
 		msg.Nack()
@@ -80,8 +81,7 @@ func (app *Application) messageHandler(_ context.Context, msg *pubsub.Message) {
 
 	go func() {
 		defer pw.Close()
-		compress(huffmanTree[0], bufio.NewReader(ogFileBytes), pw)
-		log.Printf("DEBUG: ")
+		compress(huffmanTree[0], prefixTable, bufio.NewReader(ogFileBytes), pw)
 	}()
 
 	compressedFilePath := fmt.Sprintf("%s/compressed.ranran", job.UID)
@@ -138,7 +138,7 @@ func main() {
 	log.Printf("INFO: Listening for a new message...")
 	// TODO: use context.WithCancel if fail to process during Receive
 	err = sub.Receive(ctx, app.messageHandler)
-	if err != nil {
+	if err != nil && !errors.Is(err, context.Canceled) {
 		log.Printf("ERROR: cannot process job: %v", err)
 		return
 	}

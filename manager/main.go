@@ -160,7 +160,7 @@ func main() {
 		return
 	}
 	defer GCSClient.Close()
-    log.Printf("Initialized a GCS client.")
+	log.Printf("Initialized a GCS client.")
 
 	PUBSUBClient, err := pubsub.NewClient(ctx, projectID)
 	if err != nil {
@@ -168,7 +168,7 @@ func main() {
 		return
 	}
 	defer PUBSUBClient.Close()
-    log.Printf("Initialized a Pub/Sub client.")
+	log.Printf("Initialized a Pub/Sub client.")
 
 	app := Application{
 		GCSClient:    GCSClient,

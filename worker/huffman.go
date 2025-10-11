@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"container/heap"
 	"encoding/binary"
 	"fmt"
@@ -9,6 +10,8 @@ import (
 	"log"
 	"strconv"
 )
+
+const CHUNKS_COUNT = 3
 
 type lookupItem struct {
 	char rune
@@ -23,6 +26,7 @@ type node struct {
 	right *node
 }
 
+type prefixTable map[rune]*lookupItem
 type priorityQueue []*node
 
 func (pq priorityQueue) Len() int { return len(pq) }
@@ -66,9 +70,9 @@ func buildTree(root *node, code string, bits int) {
 
 // TODO: assuming everything works like a champ. Add error handlers like
 // a normal person somewhere here
-func buildHuffmanTree(freqTable map[rune]uint64) (priorityQueue, error) {
+func buildHuffmanTree(freqTable map[rune]uint64) (priorityQueue, prefixTable, error) {
 	pq := make(priorityQueue, len(freqTable))
-	pt := make(map[rune]*lookupItem)
+	pt := make(prefixTable)
 
 	i := 0
 	for k, v := range freqTable {
@@ -104,10 +108,10 @@ func buildHuffmanTree(freqTable map[rune]uint64) (priorityQueue, error) {
 	log.Printf("INFO: built priority queue")
 	buildTree(pq[0], "", 0)
 	log.Printf("INFO: built Huffman Tree")
-	return pq, nil
+	return pq, pt, nil
 }
 
-func buildHeader(root *node, w *io.PipeWriter) error {
+func buildHeader(root *node, w *bytes.Buffer) error {
 	if root == nil {
 		return nil
 	}
@@ -127,7 +131,7 @@ func buildHeader(root *node, w *io.PipeWriter) error {
 		binary.LittleEndian.PutUint32(data[4:8], smallV)
 		// last byte: bits
 		data[8] = byte(item.bits)
-		// write to pipe
+		// write to buffer
 		if _, err := w.Write(data); err != nil {
 			return fmt.Errorf("Failed to write bytes to header: %w", err)
 		}
@@ -141,16 +145,60 @@ func buildHeader(root *node, w *io.PipeWriter) error {
 	return nil
 }
 
-func compress(root *node, data *bufio.Reader, w *io.PipeWriter) {
-
-	err := buildHeader(root, w)
+func compress(root *node, pt prefixTable, bodyData *bufio.Reader, w *io.PipeWriter) {
+	var headerBuffer bytes.Buffer
+	err := buildHeader(root, &headerBuffer)
 	if err != nil {
 		log.Printf("ERROR: failed to build header: %v", err)
 		return
 	}
-	// return &header, err
-	// header, err := buildHeader(pq[0])
-	// if err != nil {
-	// 	return nil, fmt.Errorf("Error building header: %w", err)
-	// }
+	headerLen := make([]byte, 2)
+	binary.LittleEndian.PutUint16(headerLen, uint16(headerBuffer.Len()))
+	_, err = w.Write(headerLen)
+	if err != nil {
+		log.Printf("ERROR: failed to write length header: %v", err)
+	}
+	_, err = headerBuffer.WriteTo(w)
+	if err != nil {
+		log.Printf("ERROR: failed to write header content: %v", err)
+		return
+	}
+	// log.Printf("Write %d bytes of header.", n)
+
+	// write body
+	var currentByte byte
+	var bitCount int
+	for {
+		char, _, err := bodyData.ReadRune()
+		if err != nil {
+			// If we've reached the end of the file, we're done.
+			if err == io.EOF {
+				break
+			}
+			// Otherwise, it's a real error.
+			log.Printf("ERROR: failed to read file to build freq. table: %v", err)
+			return
+		}
+		item := pt[char]
+		for _, bit := range item.code {
+			currentByte <<= 1 // shift left to make space for next bit
+			if bit == '1' {
+				currentByte |= 1
+			}
+			bitCount++
+			if bitCount == 8 {
+				w.Write([]byte{currentByte}) // TODO: find out the drawbacks of this.
+				currentByte = 0
+				bitCount = 0
+			}
+		}
+	}
+	// flush the remaining bits (pad with 0s on the right)
+	// TODO: Do I need this? Does it auto pad for me?
+	var paddedZeros uint8 = 0
+	if bitCount > 0 {
+		paddedZeros = uint8(8 - bitCount)
+		currentByte <<= paddedZeros  // shift remaining bits to fill the byte
+		w.Write([]byte{currentByte}) // TODO: find out the drawbacks of this.
+	}
 }
