@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"unicode/utf8"
 )
 
 const CHUNKS_COUNT = 3
@@ -23,6 +24,42 @@ type node struct {
 	value *lookupItem
 	left  *node
 	right *node
+}
+
+func (hn *node) addNode(char rune, code uint32, bits uint8) {
+	if bits == 0 {
+		hn.value = &lookupItem{
+			char: char,
+		}
+		return
+	}
+	direction := code >> (bits - 1)
+	if direction&1 == 0 {
+		if hn.left == nil {
+			hn.left = &node{}
+		}
+		hn.left.addNode(char, code, bits-1)
+	} else {
+		if hn.right == nil {
+			hn.right = &node{}
+		}
+		hn.right.addNode(char, code, bits-1)
+	}
+}
+
+func (hn *node) walker() func(int) (rune, bool) {
+	t := hn
+	return func(direction int) (rune, bool) {
+		if direction == 0 {
+			t = t.left
+		} else {
+			t = t.right
+		}
+		if t.value != nil {
+			return t.value.char, true
+		}
+		return 0, false
+	}
 }
 
 type prefixTable map[rune]*lookupItem
@@ -143,6 +180,7 @@ func buildHeader(root *node, w *bytes.Buffer) error {
 
 func compress(root *node, pt prefixTable, bodyData *bufio.Reader, w *io.PipeWriter) error {
 	var headerBuffer bytes.Buffer
+	//--- Write header
 	err := buildHeader(root, &headerBuffer)
 	if err != nil {
 		return fmt.Errorf("Failed to build header: %v", err)
@@ -158,7 +196,7 @@ func compress(root *node, pt prefixTable, bodyData *bufio.Reader, w *io.PipeWrit
 		return fmt.Errorf("Failed to write header content: %v", err)
 	}
 
-	// write body
+	//--- Write body
 	var currentByte byte
 	var bitCount int
 	for {
@@ -192,6 +230,67 @@ func compress(root *node, pt prefixTable, bodyData *bufio.Reader, w *io.PipeWrit
 		paddedZeros = uint8(8 - bitCount)
 		currentByte <<= paddedZeros  // shift remaining bits to fill the byte
 		w.Write([]byte{currentByte}) // TODO: find out the drawbacks of this.
+	}
+	return nil
+}
+
+// TODO: assuming this will go correctly, I need to have some good test cases
+// for this.
+func buildHuffmanTreeFromBin(headerBin []byte) *node {
+	ht := node{}
+	// character code + Huffman assigned code + bits -> 4 + 4 + 1 = 9 bytes
+	for i := 0; i < len(headerBin); i += 9 {
+		section := headerBin[i : i+9]
+		char, _ := utf8.DecodeRune(section[0:4])
+		code := binary.LittleEndian.Uint32(section[4:8])
+		bits := section[8]
+		ht.addNode(char, code, bits)
+	}
+
+	return &ht
+}
+
+func decompress(tree *node, bodyData *bufio.Reader, w *io.PipeWriter) error {
+	walk := tree.walker()
+	for {
+		// extracting padded zeros section
+		paddedZeros, err := bodyData.ReadByte()
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return fmt.Errorf("Error extracting padded 0s: %w", err)
+		}
+		// extracting body length section
+		bodyBin := make([]byte, 4)
+		_, err = bodyData.Read(bodyBin)
+		if err != nil {
+			return fmt.Errorf("Error extracting body length: %w", err)
+		}
+		bodyLen := binary.LittleEndian.Uint32(bodyBin)
+		for i := range bodyLen {
+			b, err := bodyData.ReadByte()
+			if err != nil {
+				return fmt.Errorf("Error decoding body: %w", err)
+			}
+
+			var endByte int
+			if i+1 == bodyLen {
+				// padded zeros situation
+				endByte = int(paddedZeros)
+			} else {
+				endByte = 0
+			}
+
+			for i := 7; i >= endByte; i-- {
+				bit := (b >> uint(i)) & 1
+				v, ok := walk(int(bit))
+				if ok {
+					w.Write([]byte(string(v))) // is this the efficient way?
+					walk = tree.walker()
+				}
+			}
+		}
 	}
 	return nil
 }

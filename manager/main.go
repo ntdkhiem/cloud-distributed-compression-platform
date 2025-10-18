@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"cloud.google.com/go/pubsub/v2"
@@ -19,21 +20,28 @@ import (
 )
 
 type Application struct {
-	GCSClient    *storage.Client
-	PUBSUBClient *pubsub.Client
-	CTX          *context.Context
-	Bucket       string
-	TopicID      string
+	GCSClient         *storage.Client
+	PUBSUBClient      *pubsub.Client
+	CTX               *context.Context
+	Bucket            string
+	CompressTopicID   string
+	DecompressTopicID string
 }
 
 // Must follow this schema to be accepted by Pub/Sub
-type pubsubMessageSchema struct {
+type pubsubCompressMsgSchema struct {
 	UID              string `json:"UID"`
 	OriginalFilePath string `json:"OriginalFilePath"`
 	FreqTablePath    string `json:"FreqTablePath"`
 }
 
-func (app *Application) uploadHandler(w http.ResponseWriter, r *http.Request) {
+// Must follow this schema to be accepted by Pub/Sub
+type pubsubDecompressMsgSchema struct {
+	UID                string `json:"UID"`
+	CompressedFilePath string `json:"CompressedFilePath"`
+}
+
+func (app *Application) compressHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, "Only POST method allowed", http.StatusMethodNotAllowed)
 		return
@@ -51,7 +59,7 @@ func (app *Application) uploadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-    slog.Info("Processing a request for compressing")
+	slog.Info("Processing a request for compressing")
 
 	jobID := uuid.New().String()
 	slog.Debug("Creating new job", "job", jobID, "file", header.Filename)
@@ -121,12 +129,88 @@ func (app *Application) uploadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	slog.Debug("Uploaded frequency table to GCS", "job", jobID)
 
-	// initialize new pushlisher everytime to avoid sending messages in batch.
-	publisher := app.PUBSUBClient.Publisher(app.TopicID)
-	message := pubsubMessageSchema{
+	// initialize new publisher everytime to avoid sending messages in batch.
+	// TODO: make this more tolerable to message delivery failures.
+	publisher := app.PUBSUBClient.Publisher(app.CompressTopicID)
+	message := pubsubCompressMsgSchema{
 		UID:              jobID,
 		OriginalFilePath: originalFilePath,
 		FreqTablePath:    freqTablePath,
+	}
+	messageBytes, err := json.Marshal(message)
+	if err != nil {
+		slog.Error("Failed to marshal MQ message", "job", jobID, "error", err)
+		writeError(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	result := publisher.Publish(*app.CTX, &pubsub.Message{
+		Data: messageBytes,
+	})
+	returnedMessageID, err := result.Get(*app.CTX) // blocks until Pub/Sub returns server-generated ID or error
+	if err != nil {
+		slog.Error("Failed to send MQ message", "job", jobID, "error", err)
+		writeError(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	slog.Debug("Sent message to Pub/Sub ", "job", jobID, "server_generated_message_id", returnedMessageID)
+
+	// Send 202 Accepted Code
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(map[string]string{"job_id": jobID})
+}
+
+func (app *Application) decompressHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, "Only POST method allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// set request body size limit (1GB for now)
+	// TODO: increase the limit through any means (the whole point of the program)
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<30)
+
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		slog.Error("Failed to get file from form", "error", err)
+		writeError(w, "Failed to read file: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	if !strings.HasSuffix(header.Filename, ".ranran") {
+		writeError(w, "Wrong file format", http.StatusBadRequest)
+		return
+	}
+
+	slog.Info("Processing a request for decompressing")
+
+	jobID := uuid.New().String()
+	slog.Debug("Creating new job", "job", jobID, "file", header.Filename)
+
+	ctx, cancel := context.WithTimeout(*app.CTX, time.Second*50)
+	defer cancel()
+
+	compressedFilePath := fmt.Sprintf("%s/%s", jobID, header.Filename)
+	wc := app.GCSClient.Bucket(app.Bucket).Object(compressedFilePath).NewWriter(ctx)
+	if _, err := io.Copy(wc, file); err != nil {
+		slog.Error("Failed to stream compressed data to GCS", "job", jobID, "error", err)
+		writeError(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	if err := wc.Close(); err != nil {
+		slog.Error("Failed to close data stream to GCS", "job", jobID, "error", err)
+		writeError(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	slog.Debug(fmt.Sprintf("Uploaded %s to GCS", header.Filename), "job", jobID)
+
+	// initialize new publisher everytime to avoid sending messages in batch.
+	// TODO: make this more tolerable to message delivery failures.
+	publisher := app.PUBSUBClient.Publisher(app.DecompressTopicID)
+	message := pubsubDecompressMsgSchema{
+		UID:                jobID,
+		CompressedFilePath: compressedFilePath,
 	}
 	messageBytes, err := json.Marshal(message)
 	if err != nil {
@@ -164,7 +248,8 @@ func main() {
 
 	// initialize GCP services
 	projectID := os.Getenv("GCP_PROJECT_ID")
-	topicID := os.Getenv("PUBSUB_TOPIC_ID")
+	compressTopicID := os.Getenv("PUBSUB_COMPRESS_TOPIC_ID")
+	decompressTopicID := os.Getenv("PUBSUB_DECOMPRESS_TOPIC_ID")
 	bucket := os.Getenv("GCS_BUCKET")
 	ctx := context.Background()
 
@@ -185,14 +270,16 @@ func main() {
 	slog.Debug("Initialized a Pub/Sub client.")
 
 	app := Application{
-		GCSClient:    GCSClient,
-		PUBSUBClient: PUBSUBClient,
-		CTX:          &ctx,
-		Bucket:       bucket,
-		TopicID:      topicID,
+		GCSClient:         GCSClient,
+		PUBSUBClient:      PUBSUBClient,
+		CTX:               &ctx,
+		Bucket:            bucket,
+		CompressTopicID:   compressTopicID,
+		DecompressTopicID: decompressTopicID,
 	}
 
-	http.HandleFunc("/upload", app.uploadHandler)
+	http.HandleFunc("/compress", app.compressHandler)
+	http.HandleFunc("/decompress", app.decompressHandler)
 	slog.Info("Listening on localhost:8081...")
 	http.ListenAndServe(":8081", nil)
 }

@@ -3,8 +3,10 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log/slog"
@@ -24,15 +26,21 @@ type Application struct {
 	TopicID      string
 }
 
-// Must follow this schema to be parsed from Pub/Sub
-type pubsubMessageSchema struct {
+// Must follow this schema to be accepted by Pub/Sub
+type pubsubCompressMsgSchema struct {
 	UID              string `json:"UID"`
 	OriginalFilePath string `json:"OriginalFilePath"`
 	FreqTablePath    string `json:"FreqTablePath"`
 }
 
-func (app *Application) messageHandler(_ context.Context, msg *pubsub.Message) {
-	var job pubsubMessageSchema
+// Must follow this schema to be accepted by Pub/Sub
+type pubsubDecompressMsgSchema struct {
+	UID                string `json:"UID"`
+	CompressedFilePath string `json:"CompressedFilePath"`
+}
+
+func (app *Application) compressMessageHandler(_ context.Context, msg *pubsub.Message) {
+	var job pubsubCompressMsgSchema
 	if err := json.Unmarshal(msg.Data, &job); err != nil {
 		slog.Error("Failed to unmarshal body from job message", "error", err)
 		msg.Nack()
@@ -82,12 +90,13 @@ func (app *Application) messageHandler(_ context.Context, msg *pubsub.Message) {
 
 	go func() {
 		defer pw.Close()
-        err := compress(huffmanTree[0], prefixTable, bufio.NewReader(ogFileBytes), pw)
-        if err != nil {
-            slog.Error("Failed to compress", "job", job.UID, "error", err)
-            msg.Nack()
-            return
-        }
+		slog.Debug("Compressing file content", "job", job.UID)
+		err := compress(huffmanTree[0], prefixTable, bufio.NewReader(ogFileBytes), pw)
+		if err != nil {
+			slog.Error("Failed to compress", "job", job.UID, "error", err)
+			msg.Nack()
+			return
+		}
 	}()
 
 	compressedFilePath := fmt.Sprintf("%s/compressed.ranran", job.UID)
@@ -108,7 +117,86 @@ func (app *Application) messageHandler(_ context.Context, msg *pubsub.Message) {
 	slog.Info("Completed processing job", "job", job.UID)
 }
 
+func (app *Application) decompressMessageHandler(_ context.Context, msg *pubsub.Message) {
+	var job pubsubDecompressMsgSchema
+	if err := json.Unmarshal(msg.Data, &job); err != nil {
+		slog.Error("Failed to unmarshal body from job message", "error", err)
+		msg.Nack()
+		return
+	}
+
+	slog.Info("Received job", "job", job.UID)
+
+	//--- Download character frequency table from GCS
+	ctx, cancel := context.WithTimeout(*app.CTX, time.Second*50)
+	defer cancel()
+
+	slog.Debug("Stream compressed file from GCS.", "job", job.UID)
+	//--- stream file content down and decompress
+	file, err := app.GCSClient.Bucket(app.Bucket).Object(job.CompressedFilePath).NewReader(ctx)
+	if err != nil {
+		slog.Error("Failed to download compressed file content", "job", job.UID, "error", err)
+		msg.Nack()
+		return
+	}
+	defer file.Close()
+
+	//--- extract header
+	headerLenBin := make([]byte, 2)
+	_, err = file.Read(headerLenBin)
+	if err != nil {
+		slog.Error("failed to extract header's length", "job", job.UID, "error", err)
+		msg.Nack()
+		return
+	}
+	headerLen := binary.LittleEndian.Uint16(headerLenBin)
+
+	headerBin := make([]byte, headerLen)
+	_, err = file.Read(headerBin)
+	if err != nil {
+		slog.Error("failed to extract header's content", "job", job.UID, "error", err)
+		msg.Nack()
+		return
+	}
+
+	tree := buildHuffmanTreeFromBin(headerBin)
+
+	pr, pw := io.Pipe()
+
+	go func() {
+		defer pw.Close()
+		slog.Debug("Decompressing file content", "job", job.UID)
+		err := decompress(tree, bufio.NewReader(file), pw)
+		if err != nil {
+			slog.Error("Failed to decompress", "job", job.UID, "error", err)
+			msg.Nack()
+			return
+		}
+	}()
+
+	// TODO: create a metadata with original file name to be referenced here.
+	resultFilePath := fmt.Sprintf("%s/file.txt", job.UID)
+	wc := app.GCSClient.Bucket(app.Bucket).Object(resultFilePath).NewWriter(ctx)
+	if _, err := io.Copy(wc, pr); err != nil {
+		slog.Error("Failed to stream final data to GCS", "job", job.UID, "error", err)
+		msg.Nack()
+		return
+	}
+	if err := wc.Close(); err != nil {
+		slog.Error("Failed to close data stream to GCS", "job", job.UID, "error", err)
+		msg.Nack()
+		return
+	}
+	slog.Debug("Uploaded final data to GCS", "job", job.UID)
+
+	msg.Ack()
+	slog.Info("Completed processing job", "job", job.UID)
+}
+
 func main() {
+	methodFlag := flag.Bool("decompress", false, "flag to indicate this instance is for decompressing.")
+	flag.Parse()
+
 	// initialize logging system
 	var programLevel = new(slog.LevelVar) // Info by default
 	developmentMode := os.Getenv("DEVELOPMENT_MODE")
@@ -152,9 +240,14 @@ func main() {
 
 	sub := PUBSUBClient.Subscriber(subID)
 
-	slog.Info("Listening for a new message...")
 	// TODO: use context.WithCancel if fail to process during Receive
-	err = sub.Receive(ctx, app.messageHandler)
+	if *methodFlag {
+		slog.Info("Listening for a new decompressing message...")
+		err = sub.Receive(ctx, app.decompressMessageHandler)
+	} else {
+		slog.Info("Listening for a new compressing message...")
+		err = sub.Receive(ctx, app.compressMessageHandler)
+	}
 	if err != nil && !errors.Is(err, context.Canceled) {
 		slog.Error("Cannot process job", "error", err)
 		return
