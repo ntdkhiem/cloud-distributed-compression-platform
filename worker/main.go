@@ -2,8 +2,8 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -105,13 +105,13 @@ func (app *Application) compressMessageHandler(_ context.Context, msg *pubsub.Me
 	}
 	slog.Debug("Downloaded text data", "job", job.UID)
 
-    // reset the file cursor back to the beginning
-    _, err = file.Seek(0, io.SeekStart)
-    if err != nil {
+	// reset the file cursor back to the beginning
+	_, err = file.Seek(0, io.SeekStart)
+	if err != nil {
 		slog.Error("Failed to reset file cursor", "job", job.UID, "error", err)
 		msg.Nack()
 		return
-    }
+	}
 
 	compFileBuf, err := compress(huffmanTree[0], prefixTable, bufio.NewReader(file))
 	if err != nil {
@@ -148,58 +148,50 @@ func (app *Application) decompressMessageHandler(_ context.Context, msg *pubsub.
 
 	slog.Info("Received job", "job", job.UID)
 
-	//--- Download character frequency table from GCS
 	ctx, cancel := context.WithTimeout(*app.CTX, time.Second*50)
 	defer cancel()
 
-	slog.Debug("Stream compressed file from GCS.", "job", job.UID)
-	//--- stream file content down and decompress
-	file, err := app.GCSClient.Bucket(app.Bucket).Object(job.CompressedFilePath).NewReader(ctx)
+	compFile, err := app.GCSClient.Bucket(app.Bucket).Object(job.CompressedFilePath).NewReader(ctx)
 	if err != nil {
-		slog.Error("Failed to download compressed file content", "job", job.UID, "error", err)
+		slog.Error("Failed to locate compressed file content", "job", job.UID, "error", err)
 		msg.Nack()
 		return
 	}
-	defer file.Close()
+	defer compFile.Close()
 
-	//--- extract header
-	headerLenBin := make([]byte, 2)
-	_, err = file.Read(headerLenBin)
+	// file, err := os.CreateTemp("temp", "dcas_com_org*")
+	// if err != nil {
+	// 	slog.Error("Failed to create temporary file", "job", job.UID, "error", err)
+	// 	msg.Nack()
+	// 	return
+	// }
+	// defer file.Close()
+	//
+	// // remove temp file to save space
+	// defer os.Remove(file.Name())
+
+	fileBytes, err := io.ReadAll(compFile)
 	if err != nil {
-		slog.Error("failed to extract header's length", "job", job.UID, "error", err)
+		slog.Error("Failed to download data to GCS", "job", job.UID, "error", err)
 		msg.Nack()
 		return
 	}
-	headerLen := binary.LittleEndian.Uint16(headerLenBin)
 
-	headerBin := make([]byte, headerLen)
-	_, err = file.Read(headerBin)
-	if err != nil {
-		slog.Error("failed to extract header's content", "job", job.UID, "error", err)
-		msg.Nack()
-		return
-	}
+	// reset the file cursor back to the beginning
+	// _, err = file.Seek(0, io.SeekStart)
+	// if err != nil {
+	// 	slog.Error("Failed to reset file cursor", "job", job.UID, "error", err)
+	// 	msg.Nack()
+	// 	return
+	// }
+	slog.Debug("Downloaded compressed file from GCS.", "job", job.UID)
 
-	tree := buildHuffmanTreeFromBin(headerBin)
-
-	pr, pw := io.Pipe()
-
-	go func() {
-		defer pw.Close()
-		slog.Debug("Decompressing file content", "job", job.UID)
-		err := decompress(tree, bufio.NewReader(file), pw)
-		if err != nil {
-			slog.Error("Failed to decompress", "job", job.UID, "error", err)
-			msg.Nack()
-			return
-		}
-	}()
-
-	// TODO: create a metadata with original file name to be referenced here.
 	resultFilePath := fmt.Sprintf("%s/file.txt", job.UID)
 	wc := app.GCSClient.Bucket(app.Bucket).Object(resultFilePath).NewWriter(ctx)
-	if _, err := io.Copy(wc, pr); err != nil {
-		slog.Error("Failed to stream final data to GCS", "job", job.UID, "error", err)
+
+	err = decompress(bytes.NewBuffer(fileBytes), wc)
+	if err != nil {
+		slog.Error("failed to decompress data", "job", job.UID, "error", err)
 		msg.Nack()
 		return
 	}

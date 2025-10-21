@@ -9,6 +9,8 @@ import (
 	"io"
 	"strconv"
 	"unicode/utf8"
+
+	"cloud.google.com/go/storage"
 )
 
 const CHUNKS_COUNT = 3
@@ -274,47 +276,67 @@ func buildHuffmanTreeFromBin(headerBin []byte) *node {
 	return &ht
 }
 
-func decompress(tree *node, bodyData *bufio.Reader, w *io.PipeWriter) error {
-	walk := tree.walker()
+func decompress(buf *bytes.Buffer, wc *storage.Writer) error {
+	if buf.Len() == 0 {
+		return nil
+	}
+
+	headerLenBin := make([]byte, 2)
+	_, err := buf.Read(headerLenBin)
+	if err != nil {
+		return fmt.Errorf("Error extracing header: %w", err)
+	}
+	headerLen := binary.LittleEndian.Uint16(headerLenBin)
+
+	headerBin := make([]byte, headerLen)
+	_, err = buf.Read(headerBin)
+	if err != nil {
+		return fmt.Errorf("Error splitting header and body: %w", err)
+	}
+
+	ht := node{}
+	// character code + Huffman assigned code + bits -> 4 + 4 + 1 = 9 bytes
+	for i := 0; i < len(headerBin); i += 9 {
+		section := headerBin[i : i+9]
+		char := binary.LittleEndian.Uint32(section[0:4])
+		code := binary.LittleEndian.Uint32(section[4:8])
+		bits := section[8]
+		ht.addNode(rune(char), code, bits)
+	}
+
+	paddedZeros, err := buf.ReadByte()
+	if err != nil && err != io.EOF {
+		return fmt.Errorf("Error extracting padded 0s: %w", err)
+	}
+
+	// fmt.Println("Decoding body using built tree above")
+	walk := ht.walker()
 	for {
-		// extracting padded zeros section
-		paddedZeros, err := bodyData.ReadByte()
+		bodyBin, err := buf.ReadByte()
 		if err != nil {
 			if err == io.EOF {
 				break
 			}
-			return fmt.Errorf("Error extracting padded 0s: %w", err)
+			return fmt.Errorf("Error decoding body: %w", err)
 		}
-		// extracting body length section
-		bodyBin := make([]byte, 4)
-		_, err = bodyData.Read(bodyBin)
-		if err != nil {
-			return fmt.Errorf("Error extracting body length: %w", err)
+
+		var endByte int
+		if buf.Len() == 0 {
+			endByte = int(paddedZeros)
+		} else {
+			endByte = 0
 		}
-		bodyLen := binary.LittleEndian.Uint32(bodyBin)
-		for i := range bodyLen {
-			b, err := bodyData.ReadByte()
-			if err != nil {
-				return fmt.Errorf("Error decoding body: %w", err)
-			}
 
-			var endByte int
-			if i+1 == bodyLen {
-				// padded zeros situation
-				endByte = int(paddedZeros)
-			} else {
-				endByte = 0
-			}
-
-			for i := 7; i >= endByte; i-- {
-				bit := (b >> uint(i)) & 1
-				v, ok := walk(int(bit))
-				if ok {
-					w.Write([]byte(string(v))) // is this the efficient way?
-					walk = tree.walker()
-				}
+		for i := 7; i >= endByte; i-- {
+			bit := (bodyBin >> uint(i)) & 1
+			v, ok := walk(int(bit))
+			if ok {
+				// decompText.WriteRune(rune(v))
+				wc.Write([]byte(string(v)))
+				walk = ht.walker()
 			}
 		}
 	}
+
 	return nil
 }
