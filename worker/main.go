@@ -78,36 +78,57 @@ func (app *Application) compressMessageHandler(_ context.Context, msg *pubsub.Me
 	slog.Debug("Built Huffman Tree", "job", job.UID)
 
 	// stream file content down and compress
+	// TODO: stream is too complex right now. Save it to local file system.
 	ogFileBytes, err := app.GCSClient.Bucket(app.Bucket).Object(job.OriginalFilePath).NewReader(ctx)
 	if err != nil {
-		slog.Error("Failed to download original file content", "job", job.UID, "error", err)
+		slog.Error("Failed to locate original file content", "job", job.UID, "error", err)
 		msg.Nack()
 		return
 	}
 	defer ogFileBytes.Close()
 
-	pr, pw := io.Pipe()
+	file, err := os.CreateTemp("temp", "dcas_org*")
+	if err != nil {
+		slog.Error("Failed to create temporary file", "job", job.UID, "error", err)
+		msg.Nack()
+		return
+	}
+	defer file.Close()
 
-	go func() {
-		defer pw.Close()
-		slog.Debug("Compressing file content", "job", job.UID)
-		err := compress(huffmanTree[0], prefixTable, bufio.NewReader(ogFileBytes), pw)
-		if err != nil {
-			slog.Error("Failed to compress", "job", job.UID, "error", err)
-			msg.Nack()
-			return
-		}
-	}()
+	// remove temp file to save space
+	defer os.Remove(file.Name())
+
+	if _, err := io.Copy(file, ogFileBytes); err != nil {
+		slog.Error("Failed to download data to GCS", "job", job.UID, "error", err)
+		msg.Nack()
+		return
+	}
+	slog.Debug("Downloaded text data", "job", job.UID)
+
+    // reset the file cursor back to the beginning
+    _, err = file.Seek(0, io.SeekStart)
+    if err != nil {
+		slog.Error("Failed to reset file cursor", "job", job.UID, "error", err)
+		msg.Nack()
+		return
+    }
+
+	compFileBuf, err := compress(huffmanTree[0], prefixTable, bufio.NewReader(file))
+	if err != nil {
+		slog.Error("Failed to compress data", "job", job.UID, "error", err)
+		msg.Nack()
+		return
+	}
 
 	compressedFilePath := fmt.Sprintf("%s/compressed.ranran", job.UID)
 	wc := app.GCSClient.Bucket(app.Bucket).Object(compressedFilePath).NewWriter(ctx)
-	if _, err := io.Copy(wc, pr); err != nil {
-		slog.Error("Failed to stream compressed data to GCS", "job", job.UID, "error", err)
+	if _, err := io.Copy(wc, compFileBuf); err != nil {
+		slog.Error("Failed to upload compressed data to GCS", "job", job.UID, "error", err)
 		msg.Nack()
 		return
 	}
 	if err := wc.Close(); err != nil {
-		slog.Error("Failed to close data stream to GCS", "job", job.UID, "error", err)
+		slog.Error("Failed to close data compressing stream to GCS", "job", job.UID, "error", err)
 		msg.Nack()
 		return
 	}

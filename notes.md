@@ -162,7 +162,9 @@ to another Reader.
 - what's the latency? throughput?
 - alternative? stream in trunks? how?
 
+----
 
+early optimization is killing my productivity. I'll revert back to original version now.
 
 
 

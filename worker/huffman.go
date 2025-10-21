@@ -178,60 +178,84 @@ func buildHeader(root *node, w *bytes.Buffer) error {
 	return nil
 }
 
-func compress(root *node, pt prefixTable, bodyData *bufio.Reader, w *io.PipeWriter) error {
-	var headerBuffer bytes.Buffer
-	//--- Write header
-	err := buildHeader(root, &headerBuffer)
-	if err != nil {
-		return fmt.Errorf("Failed to build header: %v", err)
-	}
-	headerLen := make([]byte, 2)
-	binary.LittleEndian.PutUint16(headerLen, uint16(headerBuffer.Len()))
-	_, err = w.Write(headerLen)
-	if err != nil {
-		return fmt.Errorf("Failed to write length header: %v", err)
-	}
-	_, err = headerBuffer.WriteTo(w)
-	if err != nil {
-		return fmt.Errorf("Failed to write header content: %v", err)
-	}
-
-	//--- Write body
-	var currentByte byte
+func buildBody(pt prefixTable, bodyData *bufio.Reader) (*bytes.Buffer, uint8, error) {
+	var output bytes.Buffer
+	var curr byte
 	var bitCount int
+
+	c := 0
+
 	for {
+		c += 1
 		char, _, err := bodyData.ReadRune()
 		if err != nil {
-			// If we've reached the end of the file, we're done.
 			if err == io.EOF {
 				break
 			}
-			// Otherwise, it's a real error.
-			return fmt.Errorf("failed to read file to build freq. table: %v", err)
+			return nil, 0, err
 		}
 		item := pt[char]
+
 		for _, bit := range item.code {
-			currentByte <<= 1 // shift left to make space for next bit
+			curr <<= 1 // shift left to make space for next bit
 			if bit == '1' {
-				currentByte |= 1
+				curr |= 1
 			}
 			bitCount++
 			if bitCount == 8 {
-				w.Write([]byte{currentByte}) // TODO: find out the drawbacks of this.
-				currentByte = 0
+				output.WriteByte(curr)
+				curr = 0
 				bitCount = 0
 			}
 		}
 	}
 	// flush the remaining bits (pad with 0s on the right)
-	// TODO: Do I need this? Does it auto pad for me?
 	var paddedZeros uint8 = 0
+
 	if bitCount > 0 {
 		paddedZeros = uint8(8 - bitCount)
-		currentByte <<= paddedZeros  // shift remaining bits to fill the byte
-		w.Write([]byte{currentByte}) // TODO: find out the drawbacks of this.
+		curr <<= paddedZeros // shift remaining bits to fill the byte
+		output.WriteByte(curr)
 	}
-	return nil
+	return &output, paddedZeros, nil
+}
+
+func compress(root *node, pt prefixTable, bodyData *bufio.Reader) (*bytes.Buffer, error) {
+	var fileBuf bytes.Buffer
+	var headerBuf bytes.Buffer
+
+	//--- Write header
+	err := buildHeader(root, &headerBuf)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to build header: %v", err)
+	}
+	headerLen := make([]byte, 2)
+	binary.LittleEndian.PutUint16(headerLen, uint16(headerBuf.Len()))
+	_, err = fileBuf.Write(headerLen)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to write length header: %v", err)
+	}
+	_, err = headerBuf.WriteTo(&fileBuf)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to write header content: %v", err)
+	}
+
+	//--- Write body
+	// TODO: implement chunks-based Huffman compression
+	encodedBody, paddedZeros, err := buildBody(pt, bodyData)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to encode body: %v", err)
+	}
+	err = fileBuf.WriteByte(paddedZeros)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to write padded zeros: %v", err)
+	}
+	_, err = encodedBody.WriteTo(&fileBuf)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to write encoded body: %w", err)
+	}
+
+	return &fileBuf, nil
 }
 
 // TODO: assuming this will go correctly, I need to have some good test cases
