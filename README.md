@@ -7,39 +7,81 @@ A scalable, event-driven file compression system that processes large datasets i
 > 
 > [CODING JOURNEY HERE](https://www.youtube.com/playlist?list=PLSg4pGV1EkBo1JCfXl4zZoHkbFe4zk_EL)
 
-# Architecture Diagram
+## Architecture Diagram
 
 _(Architecture diagram to be created.)_
 
-# Architecture Components
-- **Manager Service:** Accepts file uploads, streams file to storage, and distributes compression/decompression jobs to workers.
-- **Worker Service:** Subscribes to compression/decompression jobs, performs Huffman's algorithm, uploads to storage.
-- **Status Service (Planned):** displays real-time updates on certain jobs to users.
-- **Message Queue (Pub/Sub):** Manages the queue of asynchronous task orchestration for worker nodes in a pull-model subscription.
-- **Object Storage (Google Cloud Storage):** Scalable object storage to hold the original, metadata, and final compressed files.
-- **Document-based Database (Planned):** A real-time database (like Google Firebase) to be used by Status Service to receive updates from other services.
+## Architecture Components
+- **Manager Service:** Handles file uploads and creates jobs.
+- **Worker Service:** Processes jobs using Huffman's algorithm, lossless data compression.
+- **Status Service (Planned):** Monitors updates on certain jobs in real-time.
+- **Message Queue (Pub/Sub):** Stores queue of asynchronous jobs.
+- **Object Storage (Google Cloud Storage):** Stores files.
+- **Status Database (Planned):** (like Google Firebase) stores status for real-time updates.
 
-# Quick Start
+## Quick Start
 _(Setup and run instructions are not yet available for this project)_
 
-## Prerequisites
+### Prerequisites
 - Go
 - Docker
 - Kubernetes
 - Google Cloud Platform account (enable Pub/Sub, GCS, GKE, Firebase APIs)
 
-## Setup
+### Setup
 _(Instructions to be added)_
 
-# Development
+## Components
+### Manager Service
+- Accepts file uploads.
+- Streams files to storage while simultaneously calculate character frequency table.
+- Distributes compression/decompression jobs to message queue.
+- [TODO] Updates job status in Status DB.
+
+### Worker Service
+- Subscribes to compression/decompression jobs.
+- Downloads original/compressed file and character frequency table from storage.
+- Builds Huffman tree.
+- Encodes/Decodes file and then uploads to storage.
+- [TODO] Updates job status in Status DB.
+
+### Status Service
+- Queries from Status DB and returns updates.
+
+### Message Queue (Pub/Sub)
+- Enforces message schemas.
+- Enforces pull-based subscription model only.
+- Redelivers unacknowledged messages every x seconds for x times.
+- No Dead Letter Queue at the moment.
+
+### Object Storage (Cloud Storage)
+- Stores original file.
+- Stores character frequency table.
+- Stores metadata file: `filename`, `og_size`, `cp_size`.
+- Stores compressed file.
+
+### Status Database (Firebase)
+- Stores statuses for real-time updates.
+
+## Known Risks/Limitations
+- This design assumes a "happy path". In a distributed system, any network call can fail and any message can be delivered more than once.
+- A flood of traffic to Manager Service can lead to massive scalability issues, especially with large files, in which the service is designed to stream one file at a time.
+- How the heck can I even debug this asynchronous architecture?
+- Google managed services are not 100% SLA.
+- 
+
+## Todo
+- Write unit tests and integration tests for manager and worker services.
+- Containerize services with Docker.
+- Use Kubernetes (GKE) to manage, scale, and orchestrate the services.
+- Build Continuous Integration (CI) pipeline with Github Actions.
+- Build Continuous Deployment (CD) pipeline with ArgoCD.
+- Integrate Google Cloud Operations Suite for monitoring, logging, and tracing.
+- Implement retries logic at streaming data, sending/receiving messages to/from Message Queue, etc.
+- Create a budget plan to estimate the cost of running this system on Google Cloud Platform (GCP).
+- Split file (>= 50GB) in chunks for parallel compression. **Requires architecture redesign**
+
+## Development
 The project is currently in active development. You can follow the progress by watching [my YouTube playlist](https://www.youtube.com/playlist?list=PLSg4pGV1EkBo1JCfXl4zZoHkbFe4zk_EL).
-
-> [!TIP]
-> To keep myself responsible, I document my journey developing this project from scratch so...  
-> [FOLLOW MY CODING JOURNEY HERE](https://www.youtube.com/playlist?list=PLSg4pGV1EkBo1JCfXl4zZoHkbFe4zk_EL)
- 
-_As a complete noob in Cloud, this is a challenge for myself to learn everything by building an enterprise-scale cool thing from the ground up using Go._
-
-A cloud‑native distributed compression platform that splits large files into chunks, compresses them in parallel across a cluster of worker nodes, and seamlessly merges the results. 
 
 _Inspired by Silicon Valley series and [codingchallenges.fyi](https://codingchallenges.fyi/challenges/challenge-huffman) :)_
