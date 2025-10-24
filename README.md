@@ -9,7 +9,9 @@ A scalable, event-driven file compression system that processes large datasets i
 
 ## Architecture Diagram
 
-_(Architecture diagram to be created.)_
+<img width="524" height="388" alt="DCaS V1 drawio" src="https://github.com/user-attachments/assets/2ed04763-95ec-4def-87bc-558793985f47" />
+
+To be evolved soon.
 
 ## Architecture Components
 - **Manager Service:** Handles file uploads and creates jobs.
@@ -61,6 +63,7 @@ _(Instructions to be added)_
 - Stores compressed file.
 
 ### Status Database (Firebase)
+- Provides highly available, low-latency NoSQL data.
 - Stores statuses for real-time updates.
 
 ## Known Risks/Limitations
@@ -68,7 +71,7 @@ _(Instructions to be added)_
 - A flood of traffic to Manager Service can lead to massive scalability issues, especially with large files, in which the service is designed to stream one file at a time.
 - How the heck can I even debug this asynchronous architecture?
 - Google managed services are not 100% SLA.
-- 
+- Services can access GCS and Pub/Sub with no known rate limits, quotas.
 
 ## Todo
 - Write unit tests and integration tests for manager and worker services.
