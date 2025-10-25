@@ -37,3 +37,4 @@ go.work.sum
 *private.json
 
 Makefile
+temp/*
