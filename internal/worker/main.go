@@ -16,32 +16,20 @@ import (
 
 	"cloud.google.com/go/pubsub/v2"
 	"cloud.google.com/go/storage"
+
+	"github.com/ntdkhiem/cloud-distributed-compression-platform/internal/common"
 )
 
 type Application struct {
-	GCSClient    *storage.Client
-	PUBSUBClient *pubsub.Client
-	CTX          *context.Context
-	Bucket       string
-	TopicID      string
+	GCSClient  common.GCSClientInterface
+	CTX        *context.Context
+	Bucket     string
+	GCSTimeout time.Duration
 }
 
-// Must follow this schema to be accepted by Pub/Sub
-type pubsubCompressMsgSchema struct {
-	UID              string `json:"UID"`
-	OriginalFilePath string `json:"OriginalFilePath"`
-	FreqTablePath    string `json:"FreqTablePath"`
-}
-
-// Must follow this schema to be accepted by Pub/Sub
-type pubsubDecompressMsgSchema struct {
-	UID                string `json:"UID"`
-	CompressedFilePath string `json:"CompressedFilePath"`
-}
-
-func (app *Application) compressMessageHandler(_ context.Context, msg *pubsub.Message) {
-	var job pubsubCompressMsgSchema
-	if err := json.Unmarshal(msg.Data, &job); err != nil {
+func (app *Application) compressMessageHandler(_ context.Context, msg common.MessageInterface) {
+	var job common.CompressedMsgSchema
+	if err := json.Unmarshal(msg.GetData(), &job); err != nil {
 		slog.Error("Failed to unmarshal body from job message", "error", err)
 		msg.Nack()
 		return
@@ -50,19 +38,19 @@ func (app *Application) compressMessageHandler(_ context.Context, msg *pubsub.Me
 	slog.Info("Received job", "job", job.UID)
 
 	// Download character frequency table from GCS
-	ctx, cancel := context.WithTimeout(*app.CTX, time.Second*50)
+	ctx, cancel := context.WithTimeout(*app.CTX, app.GCSTimeout)
 	defer cancel()
 
-	freqTableBytes, err := app.GCSClient.Bucket(app.Bucket).Object(job.FreqTablePath).NewReader(ctx)
+	freqTableReader, err := app.GCSClient.NewObjectReader(ctx, app.Bucket, job.FreqTablePath)
 	if err != nil {
 		slog.Error("Failed to download character frequency table", "job", job.UID, "error", err)
 		msg.Nack()
 		return
 	}
-	defer freqTableBytes.Close()
+	defer freqTableReader.Close()
 
 	var freqTable map[rune]uint64
-	if err := json.NewDecoder(freqTableBytes).Decode(&freqTable); err != nil {
+	if err := json.NewDecoder(freqTableReader).Decode(&freqTable); err != nil {
 		slog.Error("Failed to decode character frequency table", "job", job.UID, "error", err)
 		msg.Nack()
 		return
@@ -78,27 +66,16 @@ func (app *Application) compressMessageHandler(_ context.Context, msg *pubsub.Me
 	slog.Debug("Built Huffman Tree", "job", job.UID)
 
 	// stream file content down and compress
-	// TODO: stream is too complex right now. Save it to local file system.
-	ogFileBytes, err := app.GCSClient.Bucket(app.Bucket).Object(job.OriginalFilePath).NewReader(ctx)
+	ogFileReader, err := app.GCSClient.NewObjectReader(ctx, app.Bucket, job.OriginalFilePath)
 	if err != nil {
 		slog.Error("Failed to locate original file content", "job", job.UID, "error", err)
 		msg.Nack()
 		return
 	}
-	defer ogFileBytes.Close()
+	defer ogFileReader.Close()
 
-	file, err := os.CreateTemp("temp", "dcas_org*")
+	ogFileBytes, err := io.ReadAll(ogFileReader)
 	if err != nil {
-		slog.Error("Failed to create temporary file", "job", job.UID, "error", err)
-		msg.Nack()
-		return
-	}
-	defer file.Close()
-
-	// remove temp file to save space
-	defer os.Remove(file.Name())
-
-	if _, err := io.Copy(file, ogFileBytes); err != nil {
 		slog.Error("Failed to download data to GCS", "job", job.UID, "error", err)
 		msg.Nack()
 		return
@@ -106,14 +83,9 @@ func (app *Application) compressMessageHandler(_ context.Context, msg *pubsub.Me
 	slog.Debug("Downloaded text data", "job", job.UID)
 
 	// reset the file cursor back to the beginning
-	_, err = file.Seek(0, io.SeekStart)
-	if err != nil {
-		slog.Error("Failed to reset file cursor", "job", job.UID, "error", err)
-		msg.Nack()
-		return
-	}
+	fileReader := bufio.NewReader(bytes.NewReader(ogFileBytes))
 
-	compFileBuf, err := compress(huffmanTree[0], prefixTable, bufio.NewReader(file))
+	compFileBuf, err := compress(huffmanTree[0], prefixTable, fileReader)
 	if err != nil {
 		slog.Error("Failed to compress data", "job", job.UID, "error", err)
 		msg.Nack()
@@ -121,7 +93,7 @@ func (app *Application) compressMessageHandler(_ context.Context, msg *pubsub.Me
 	}
 
 	compressedFilePath := fmt.Sprintf("%s/compressed.ranran", job.UID)
-	wc := app.GCSClient.Bucket(app.Bucket).Object(compressedFilePath).NewWriter(ctx)
+	wc := app.GCSClient.NewObjectWriter(ctx, app.Bucket, compressedFilePath)
 	if _, err := io.Copy(wc, compFileBuf); err != nil {
 		slog.Error("Failed to upload compressed data to GCS", "job", job.UID, "error", err)
 		msg.Nack()
@@ -138,9 +110,9 @@ func (app *Application) compressMessageHandler(_ context.Context, msg *pubsub.Me
 	slog.Info("Completed processing job", "job", job.UID)
 }
 
-func (app *Application) decompressMessageHandler(_ context.Context, msg *pubsub.Message) {
-	var job pubsubDecompressMsgSchema
-	if err := json.Unmarshal(msg.Data, &job); err != nil {
+func (app *Application) decompressMessageHandler(_ context.Context, msg common.MessageInterface) {
+	var job common.DecompressedMsgSchema
+	if err := json.Unmarshal(msg.GetData(), &job); err != nil {
 		slog.Error("Failed to unmarshal body from job message", "error", err)
 		msg.Nack()
 		return
@@ -148,27 +120,16 @@ func (app *Application) decompressMessageHandler(_ context.Context, msg *pubsub.
 
 	slog.Info("Received job", "job", job.UID)
 
-	ctx, cancel := context.WithTimeout(*app.CTX, time.Second*50)
+	ctx, cancel := context.WithTimeout(*app.CTX, app.GCSTimeout)
 	defer cancel()
 
-	compFile, err := app.GCSClient.Bucket(app.Bucket).Object(job.CompressedFilePath).NewReader(ctx)
+	compFile, err := app.GCSClient.NewObjectReader(ctx, app.Bucket, job.CompressedFilePath)
 	if err != nil {
 		slog.Error("Failed to locate compressed file content", "job", job.UID, "error", err)
 		msg.Nack()
 		return
 	}
 	defer compFile.Close()
-
-	// file, err := os.CreateTemp("temp", "dcas_com_org*")
-	// if err != nil {
-	// 	slog.Error("Failed to create temporary file", "job", job.UID, "error", err)
-	// 	msg.Nack()
-	// 	return
-	// }
-	// defer file.Close()
-	//
-	// // remove temp file to save space
-	// defer os.Remove(file.Name())
 
 	fileBytes, err := io.ReadAll(compFile)
 	if err != nil {
@@ -177,17 +138,10 @@ func (app *Application) decompressMessageHandler(_ context.Context, msg *pubsub.
 		return
 	}
 
-	// reset the file cursor back to the beginning
-	// _, err = file.Seek(0, io.SeekStart)
-	// if err != nil {
-	// 	slog.Error("Failed to reset file cursor", "job", job.UID, "error", err)
-	// 	msg.Nack()
-	// 	return
-	// }
 	slog.Debug("Downloaded compressed file from GCS.", "job", job.UID)
 
 	resultFilePath := fmt.Sprintf("%s/file.txt", job.UID)
-	wc := app.GCSClient.Bucket(app.Bucket).Object(resultFilePath).NewWriter(ctx)
+	wc := app.GCSClient.NewObjectWriter(ctx, app.Bucket, resultFilePath)
 
 	err = decompress(bytes.NewBuffer(fileBytes), wc)
 	if err != nil {
@@ -222,7 +176,6 @@ func main() {
 
 	// initialize GCP services
 	projectID := os.Getenv("GCP_PROJECT_ID")
-	topicID := os.Getenv("PUBSUB_TOPIC_ID")
 	subID := os.Getenv("PUBSUB_SUB_ID")
 	bucket := os.Getenv("GCS_BUCKET")
 	ctx := context.Background()
@@ -243,24 +196,31 @@ func main() {
 	defer PUBSUBClient.Close()
 	slog.Debug("Initialized a Pub/Sub client.")
 
+	realGCS := &common.RealGCSClient{Client: GCSClient}
+
 	app := Application{
-		GCSClient:    GCSClient,
-		PUBSUBClient: PUBSUBClient,
-		CTX:          &ctx,
-		Bucket:       bucket,
-		TopicID:      topicID,
+		GCSClient: realGCS,
+		CTX:       &ctx,
+		Bucket:    bucket,
+        GCSTimeout: 50 * time.Second,
 	}
 
 	sub := PUBSUBClient.Subscriber(subID)
+	receiveFunc := func(ctx context.Context, msg *pubsub.Message) {
+		wrappedMsg := &common.RealMessage{Msg: msg}
+		if *methodFlag {
+			app.decompressMessageHandler(ctx, wrappedMsg)
+		} else {
+			app.compressMessageHandler(ctx, wrappedMsg)
+		}
+	}
 
-	// TODO: use context.WithCancel if fail to process during Receive
 	if *methodFlag {
 		slog.Info("Listening for a new decompressing message...")
-		err = sub.Receive(ctx, app.decompressMessageHandler)
 	} else {
 		slog.Info("Listening for a new compressing message...")
-		err = sub.Receive(ctx, app.compressMessageHandler)
 	}
+	err = sub.Receive(ctx, receiveFunc)
 	if err != nil && !errors.Is(err, context.Canceled) {
 		slog.Error("Cannot process job", "error", err)
 		return

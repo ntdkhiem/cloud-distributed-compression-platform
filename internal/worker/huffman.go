@@ -8,9 +8,8 @@ import (
 	"fmt"
 	"io"
 	"strconv"
-	"unicode/utf8"
 
-	"cloud.google.com/go/storage"
+	"github.com/ntdkhiem/cloud-distributed-compression-platform/internal/common"
 )
 
 const CHUNKS_COUNT = 3
@@ -260,23 +259,23 @@ func compress(root *node, pt prefixTable, bodyData *bufio.Reader) (*bytes.Buffer
 	return &fileBuf, nil
 }
 
-// TODO: assuming this will go correctly, I need to have some good test cases
-// for this.
-func buildHuffmanTreeFromBin(headerBin []byte) *node {
-	ht := node{}
-	// character code + Huffman assigned code + bits -> 4 + 4 + 1 = 9 bytes
-	for i := 0; i < len(headerBin); i += 9 {
-		section := headerBin[i : i+9]
-		char, _ := utf8.DecodeRune(section[0:4])
-		code := binary.LittleEndian.Uint32(section[4:8])
-		bits := section[8]
-		ht.addNode(char, code, bits)
-	}
+// // TODO: assuming this will go correctly, I need to have some good test cases
+// // for this.
+// func buildHuffmanTreeFromBin(headerBin []byte) *node {
+// 	ht := node{}
+// 	// character code + Huffman assigned code + bits -> 4 + 4 + 1 = 9 bytes
+// 	for i := 0; i < len(headerBin); i += 9 {
+// 		section := headerBin[i : i+9]
+// 		char, _ := utf8.DecodeRune(section[0:4])
+// 		code := binary.LittleEndian.Uint32(section[4:8])
+// 		bits := section[8]
+// 		ht.addNode(char, code, bits)
+// 	}
+//
+// 	return &ht
+// }
 
-	return &ht
-}
-
-func decompress(buf *bytes.Buffer, wc *storage.Writer) error {
+func decompress(buf *bytes.Buffer, wc common.GCSObjectWriterInterface) error {
 	if buf.Len() == 0 {
 		return nil
 	}
