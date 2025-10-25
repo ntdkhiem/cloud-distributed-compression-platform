@@ -19,13 +19,42 @@ import (
 	"github.com/google/uuid"
 )
 
+// Abstract interfaces
+type GCSClientInterface interface {
+	NewObjectWriter(ctx context.Context, bucket, object string) io.WriteCloser
+}
+
+type PubSubClientInterface interface {
+	PublishMessage(ctx context.Context, topicID string, msg *pubsub.Message) (string, error)
+}
+
+type realGCSClient struct {
+	client *storage.Client
+}
+
+func (c *realGCSClient) NewObjectWriter(ctx context.Context, bucket, object string) io.WriteCloser {
+	return c.client.Bucket(bucket).Object(object).NewWriter(ctx)
+}
+
+type realPubSubClient struct {
+	client *pubsub.Client
+}
+
+func (c *realPubSubClient) PublishMessage(ctx context.Context, topicID string, msg *pubsub.Message) (string, error) {
+	publisher := c.client.Publisher(topicID)
+	result := publisher.Publish(ctx, msg)
+	return result.Get(ctx)
+}
+
 type Application struct {
-	GCSClient         *storage.Client
-	PUBSUBClient      *pubsub.Client
+	GCSClient         GCSClientInterface
+	PUBSUBClient      PubSubClientInterface
 	CTX               *context.Context
 	Bucket            string
 	CompressTopicID   string
 	DecompressTopicID string
+	MaxUploadSize     int64
+	GCSTimeout        time.Duration
 }
 
 // Must follow this schema to be accepted by Pub/Sub
@@ -49,11 +78,16 @@ func (app *Application) compressHandler(w http.ResponseWriter, r *http.Request) 
 
 	// set request body size limit (1GB for now)
 	// TODO: increase the limit through any means (the whole point of the program)
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<30)
+	r.Body = http.MaxBytesReader(w, r.Body, app.MaxUploadSize)
 
 	file, header, err := r.FormFile("file")
 	if err != nil {
 		slog.Error("Failed to get file from form", "error", err)
+		// This error is triggered when MaxBytesReader limit is exceeded
+		if strings.Contains(err.Error(), "request body too large") {
+			writeError(w, "File exceeds size limit", http.StatusRequestEntityTooLarge)
+			return
+		}
 		writeError(w, "Failed to read file: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -82,8 +116,8 @@ func (app *Application) compressHandler(w http.ResponseWriter, r *http.Request) 
 					break
 				}
 				// Otherwise, it's a real error.
-				// TODO: how do I return this error as internal error from go routine?
 				slog.Error("Failed to read file to build freq. table", "job", jobID, "error", err)
+				pw.CloseWithError(err)
 				return
 			}
 			// Increment the count for the character.
@@ -91,11 +125,11 @@ func (app *Application) compressHandler(w http.ResponseWriter, r *http.Request) 
 		}
 	}()
 
-	ctx, cancel := context.WithTimeout(*app.CTX, time.Second*50)
+	ctx, cancel := context.WithTimeout(*app.CTX, app.GCSTimeout)
 	defer cancel()
 
 	originalFilePath := fmt.Sprintf("%s/original_%s", jobID, header.Filename)
-	wc := app.GCSClient.Bucket(app.Bucket).Object(originalFilePath).NewWriter(ctx)
+	wc := app.GCSClient.NewObjectWriter(ctx, app.Bucket, originalFilePath)
 	if _, err := io.Copy(wc, pr); err != nil {
 		slog.Error("Failed to stream data to GCS", "job", jobID, "error", err)
 		writeError(w, "Internal server error", http.StatusInternalServerError)
@@ -116,7 +150,7 @@ func (app *Application) compressHandler(w http.ResponseWriter, r *http.Request) 
 	}
 
 	freqTablePath := fmt.Sprintf("%s/frequency_table.json", jobID)
-	wc = app.GCSClient.Bucket(app.Bucket).Object(freqTablePath).NewWriter(ctx)
+	wc = app.GCSClient.NewObjectWriter(ctx, app.Bucket, freqTablePath)
 	if _, err := io.Copy(wc, bytes.NewReader(freqTableBytes)); err != nil {
 		slog.Error("Failed to stream frequency table to GCS", "job", jobID, "error", err)
 		writeError(w, "Internal server error", http.StatusInternalServerError)
@@ -131,7 +165,6 @@ func (app *Application) compressHandler(w http.ResponseWriter, r *http.Request) 
 
 	// initialize new publisher everytime to avoid sending messages in batch.
 	// TODO: make this more tolerable to message delivery failures.
-	publisher := app.PUBSUBClient.Publisher(app.CompressTopicID)
 	message := pubsubCompressMsgSchema{
 		UID:              jobID,
 		OriginalFilePath: originalFilePath,
@@ -143,10 +176,10 @@ func (app *Application) compressHandler(w http.ResponseWriter, r *http.Request) 
 		writeError(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
-	result := publisher.Publish(*app.CTX, &pubsub.Message{
+
+	returnedMessageID, err := app.PUBSUBClient.PublishMessage(*app.CTX, app.CompressTopicID, &pubsub.Message{
 		Data: messageBytes,
 	})
-	returnedMessageID, err := result.Get(*app.CTX) // blocks until Pub/Sub returns server-generated ID or error
 	if err != nil {
 		slog.Error("Failed to send MQ message", "job", jobID, "error", err)
 		writeError(w, "Internal server error", http.StatusInternalServerError)
@@ -168,11 +201,16 @@ func (app *Application) decompressHandler(w http.ResponseWriter, r *http.Request
 
 	// set request body size limit (1GB for now)
 	// TODO: increase the limit through any means (the whole point of the program)
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<30)
+	r.Body = http.MaxBytesReader(w, r.Body, app.MaxUploadSize)
 
 	file, header, err := r.FormFile("file")
 	if err != nil {
 		slog.Error("Failed to get file from form", "error", err)
+		// This error is triggered when MaxBytesReader limit is exceeded
+		if strings.Contains(err.Error(), "request body too large") {
+			writeError(w, "File exceeds size limit", http.StatusRequestEntityTooLarge)
+			return
+		}
 		writeError(w, "Failed to read file: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -192,7 +230,7 @@ func (app *Application) decompressHandler(w http.ResponseWriter, r *http.Request
 	defer cancel()
 
 	compressedFilePath := fmt.Sprintf("%s/%s", jobID, header.Filename)
-	wc := app.GCSClient.Bucket(app.Bucket).Object(compressedFilePath).NewWriter(ctx)
+	wc := app.GCSClient.NewObjectWriter(ctx, app.Bucket, compressedFilePath)
 	if _, err := io.Copy(wc, file); err != nil {
 		slog.Error("Failed to stream compressed data to GCS", "job", jobID, "error", err)
 		writeError(w, "Internal server error", http.StatusInternalServerError)
@@ -207,7 +245,6 @@ func (app *Application) decompressHandler(w http.ResponseWriter, r *http.Request
 
 	// initialize new publisher everytime to avoid sending messages in batch.
 	// TODO: make this more tolerable to message delivery failures.
-	publisher := app.PUBSUBClient.Publisher(app.DecompressTopicID)
 	message := pubsubDecompressMsgSchema{
 		UID:                jobID,
 		CompressedFilePath: compressedFilePath,
@@ -218,10 +255,9 @@ func (app *Application) decompressHandler(w http.ResponseWriter, r *http.Request
 		writeError(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
-	result := publisher.Publish(*app.CTX, &pubsub.Message{
+	returnedMessageID, err := app.PUBSUBClient.PublishMessage(*app.CTX, app.DecompressTopicID, &pubsub.Message{
 		Data: messageBytes,
 	})
-	returnedMessageID, err := result.Get(*app.CTX) // blocks until Pub/Sub returns server-generated ID or error
 	if err != nil {
 		slog.Error("Failed to send MQ message", "job", jobID, "error", err)
 		writeError(w, "Internal server error", http.StatusInternalServerError)
@@ -269,13 +305,18 @@ func main() {
 	defer PUBSUBClient.Close()
 	slog.Debug("Initialized a Pub/Sub client.")
 
+	realGCS := &realGCSClient{client: GCSClient}
+	realPubSub := &realPubSubClient{client: PUBSUBClient}
+
 	app := Application{
-		GCSClient:         GCSClient,
-		PUBSUBClient:      PUBSUBClient,
+		GCSClient:         realGCS,
+		PUBSUBClient:      realPubSub,
 		CTX:               &ctx,
 		Bucket:            bucket,
 		CompressTopicID:   compressTopicID,
 		DecompressTopicID: decompressTopicID,
+		MaxUploadSize:     1 << 30, // 1GB
+		GCSTimeout:        50 * time.Second,
 	}
 
 	http.HandleFunc("/compress", app.compressHandler)
