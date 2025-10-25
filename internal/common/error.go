@@ -1,16 +1,16 @@
-package main
+package common
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
-    "log"
 )
 
 type errorResponse struct {
 	Error string `json:"error"`
 }
 
-func writeError(w http.ResponseWriter, text string, statusCode int) {
+func WriteError(w http.ResponseWriter, text string, statusCode int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
 	response := errorResponse{Error: text}

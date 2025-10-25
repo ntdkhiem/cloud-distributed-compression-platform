@@ -17,6 +17,8 @@ import (
 
 	"cloud.google.com/go/pubsub/v2"
 	"github.com/google/uuid"
+
+	"github.com/ntdkhiem/cloud-distributed-compression-platform/internal/common"
 )
 
 // --- Mocks ---
@@ -48,13 +50,19 @@ func (w *mockGCSWriter) Close() error {
 }
 
 // NewObjectWriter creates an in-memory writer
-func (c *mockGCSClient) NewObjectWriter(ctx context.Context, bucket, object string) io.WriteCloser {
+func (c *mockGCSClient) NewObjectWriter(ctx context.Context, bucket, object string) common.GCSObjectWriterInterface {
 	// Note: We don't need to check the bucket for this mock
 	return &mockGCSWriter{
 		objectPath: object,
 		buffer:     new(bytes.Buffer),
 		client:     c,
 	}
+}
+
+// NewObjectWriter creates an in-memory writer
+func (c *mockGCSClient) NewObjectReader(ctx context.Context, bucket, object string) (common.GCSObjectReaderInterface, error) {
+	// Note: We don't need to check the bucket for this mock
+	return nil, nil
 }
 
 // Helper to get file content from the mock
@@ -270,7 +278,7 @@ func TestCompressHandler(t *testing.T) {
 			if len(messages) != 1 {
 				t.Fatalf("Expected 1 Pub/Sub message, got %d", len(messages))
 			}
-			var pubsubMsg pubsubCompressMsgSchema
+			var pubsubMsg common.CompressedMsgSchema
 			if err := json.Unmarshal(messages[0].Data, &pubsubMsg); err != nil {
 				t.Fatalf("Failed to unmarshal Pub/Sub message: %v", err)
 			}
@@ -318,7 +326,7 @@ func TestDecompressHandler(t *testing.T) {
 			fileName:       "archive.ranran",
 			expectedStatus: http.StatusAccepted,
 		},
-        {
+		{
 			name:           "file extension (wrong extension)",
 			fileContent:    "some_data",
 			fileName:       "archive.zip",
@@ -375,7 +383,7 @@ func TestDecompressHandler(t *testing.T) {
 			if len(messages) != 1 {
 				t.Fatalf("Expected 1 Pub/Sub message, got %d", len(messages))
 			}
-			var pubsubMsg pubsubDecompressMsgSchema
+			var pubsubMsg common.DecompressedMsgSchema
 			if err := json.Unmarshal(messages[0].Data, &pubsubMsg); err != nil {
 				t.Fatalf("Failed to unmarshal Pub/Sub message: %v", err)
 			}

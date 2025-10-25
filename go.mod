@@ -1,11 +1,12 @@
-module compression-platform
+module github.com/ntdkhiem/cloud-distributed-compression-platform
 
 go 1.24.3
 
 require (
-	cloud.google.com/go/pubsub/v2 v2.2.0
+	cloud.google.com/go/pubsub/v2 v2.3.0
 	cloud.google.com/go/storage v1.57.0
 	github.com/google/uuid v1.6.0
+	github.com/ntdkhiem/cloud-distributed-compression-platform/internal/common v0.0.0-00010101000000-000000000000
 )
 
 require (
@@ -57,3 +58,5 @@ require (
 	google.golang.org/grpc v1.74.3 // indirect
 	google.golang.org/protobuf v1.36.7 // indirect
 )
+
+replace github.com/ntdkhiem/cloud-distributed-compression-platform/internal/common => ./internal/common

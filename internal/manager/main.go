@@ -17,38 +17,13 @@ import (
 	"cloud.google.com/go/pubsub/v2"
 	"cloud.google.com/go/storage"
 	"github.com/google/uuid"
+
+	"github.com/ntdkhiem/cloud-distributed-compression-platform/internal/common"
 )
 
-// Abstract interfaces
-type GCSClientInterface interface {
-	NewObjectWriter(ctx context.Context, bucket, object string) io.WriteCloser
-}
-
-type PubSubClientInterface interface {
-	PublishMessage(ctx context.Context, topicID string, msg *pubsub.Message) (string, error)
-}
-
-type realGCSClient struct {
-	client *storage.Client
-}
-
-func (c *realGCSClient) NewObjectWriter(ctx context.Context, bucket, object string) io.WriteCloser {
-	return c.client.Bucket(bucket).Object(object).NewWriter(ctx)
-}
-
-type realPubSubClient struct {
-	client *pubsub.Client
-}
-
-func (c *realPubSubClient) PublishMessage(ctx context.Context, topicID string, msg *pubsub.Message) (string, error) {
-	publisher := c.client.Publisher(topicID)
-	result := publisher.Publish(ctx, msg)
-	return result.Get(ctx)
-}
-
 type Application struct {
-	GCSClient         GCSClientInterface
-	PUBSUBClient      PubSubClientInterface
+	GCSClient         common.GCSClientInterface
+	PUBSUBClient      common.PubSubClientInterface
 	CTX               *context.Context
 	Bucket            string
 	CompressTopicID   string
@@ -57,22 +32,9 @@ type Application struct {
 	GCSTimeout        time.Duration
 }
 
-// Must follow this schema to be accepted by Pub/Sub
-type pubsubCompressMsgSchema struct {
-	UID              string `json:"UID"`
-	OriginalFilePath string `json:"OriginalFilePath"`
-	FreqTablePath    string `json:"FreqTablePath"`
-}
-
-// Must follow this schema to be accepted by Pub/Sub
-type pubsubDecompressMsgSchema struct {
-	UID                string `json:"UID"`
-	CompressedFilePath string `json:"CompressedFilePath"`
-}
-
 func (app *Application) compressHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, "Only POST method allowed", http.StatusMethodNotAllowed)
+		common.WriteError(w, "Only POST method allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -85,10 +47,10 @@ func (app *Application) compressHandler(w http.ResponseWriter, r *http.Request) 
 		slog.Error("Failed to get file from form", "error", err)
 		// This error is triggered when MaxBytesReader limit is exceeded
 		if strings.Contains(err.Error(), "request body too large") {
-			writeError(w, "File exceeds size limit", http.StatusRequestEntityTooLarge)
+			common.WriteError(w, "File exceeds size limit", http.StatusRequestEntityTooLarge)
 			return
 		}
-		writeError(w, "Failed to read file: "+err.Error(), http.StatusBadRequest)
+		common.WriteError(w, "Failed to read file: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 	defer file.Close()
@@ -132,12 +94,12 @@ func (app *Application) compressHandler(w http.ResponseWriter, r *http.Request) 
 	wc := app.GCSClient.NewObjectWriter(ctx, app.Bucket, originalFilePath)
 	if _, err := io.Copy(wc, pr); err != nil {
 		slog.Error("Failed to stream data to GCS", "job", jobID, "error", err)
-		writeError(w, "Internal server error", http.StatusInternalServerError)
+		common.WriteError(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 	if err := wc.Close(); err != nil {
 		slog.Error("Failed to close data stream to GCS", "job", jobID, "error", err)
-		writeError(w, "Internal server error", http.StatusInternalServerError)
+		common.WriteError(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 	slog.Debug(fmt.Sprintf("Uploaded %s to GCS", header.Filename), "job", jobID)
@@ -145,7 +107,7 @@ func (app *Application) compressHandler(w http.ResponseWriter, r *http.Request) 
 	freqTableBytes, err := json.Marshal(freqTable)
 	if err != nil {
 		slog.Error("Failed to marshal frequency table", "job", jobID, "error", err)
-		writeError(w, "Internal server error", http.StatusInternalServerError)
+		common.WriteError(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
@@ -153,19 +115,19 @@ func (app *Application) compressHandler(w http.ResponseWriter, r *http.Request) 
 	wc = app.GCSClient.NewObjectWriter(ctx, app.Bucket, freqTablePath)
 	if _, err := io.Copy(wc, bytes.NewReader(freqTableBytes)); err != nil {
 		slog.Error("Failed to stream frequency table to GCS", "job", jobID, "error", err)
-		writeError(w, "Internal server error", http.StatusInternalServerError)
+		common.WriteError(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 	if err := wc.Close(); err != nil {
 		slog.Error("Failed to close frequency table data stream to GCS", "job", jobID, "error", err)
-		writeError(w, "Internal server error", http.StatusInternalServerError)
+		common.WriteError(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 	slog.Debug("Uploaded frequency table to GCS", "job", jobID)
 
 	// initialize new publisher everytime to avoid sending messages in batch.
 	// TODO: make this more tolerable to message delivery failures.
-	message := pubsubCompressMsgSchema{
+	message := common.CompressedMsgSchema{
 		UID:              jobID,
 		OriginalFilePath: originalFilePath,
 		FreqTablePath:    freqTablePath,
@@ -173,7 +135,7 @@ func (app *Application) compressHandler(w http.ResponseWriter, r *http.Request) 
 	messageBytes, err := json.Marshal(message)
 	if err != nil {
 		slog.Error("Failed to marshal MQ message", "job", jobID, "error", err)
-		writeError(w, "Internal server error", http.StatusInternalServerError)
+		common.WriteError(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
@@ -182,7 +144,7 @@ func (app *Application) compressHandler(w http.ResponseWriter, r *http.Request) 
 	})
 	if err != nil {
 		slog.Error("Failed to send MQ message", "job", jobID, "error", err)
-		writeError(w, "Internal server error", http.StatusInternalServerError)
+		common.WriteError(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 	slog.Debug("Sent message to Pub/Sub ", "job", jobID, "server_generated_message_id", returnedMessageID)
@@ -195,7 +157,7 @@ func (app *Application) compressHandler(w http.ResponseWriter, r *http.Request) 
 
 func (app *Application) decompressHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, "Only POST method allowed", http.StatusMethodNotAllowed)
+		common.WriteError(w, "Only POST method allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -208,16 +170,16 @@ func (app *Application) decompressHandler(w http.ResponseWriter, r *http.Request
 		slog.Error("Failed to get file from form", "error", err)
 		// This error is triggered when MaxBytesReader limit is exceeded
 		if strings.Contains(err.Error(), "request body too large") {
-			writeError(w, "File exceeds size limit", http.StatusRequestEntityTooLarge)
+			common.WriteError(w, "File exceeds size limit", http.StatusRequestEntityTooLarge)
 			return
 		}
-		writeError(w, "Failed to read file: "+err.Error(), http.StatusBadRequest)
+		common.WriteError(w, "Failed to read file: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 	defer file.Close()
 
 	if !strings.HasSuffix(header.Filename, ".ranran") {
-		writeError(w, "Wrong file format", http.StatusBadRequest)
+		common.WriteError(w, "Wrong file format", http.StatusBadRequest)
 		return
 	}
 
@@ -233,26 +195,26 @@ func (app *Application) decompressHandler(w http.ResponseWriter, r *http.Request
 	wc := app.GCSClient.NewObjectWriter(ctx, app.Bucket, compressedFilePath)
 	if _, err := io.Copy(wc, file); err != nil {
 		slog.Error("Failed to stream compressed data to GCS", "job", jobID, "error", err)
-		writeError(w, "Internal server error", http.StatusInternalServerError)
+		common.WriteError(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 	if err := wc.Close(); err != nil {
 		slog.Error("Failed to close data stream to GCS", "job", jobID, "error", err)
-		writeError(w, "Internal server error", http.StatusInternalServerError)
+		common.WriteError(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 	slog.Debug(fmt.Sprintf("Uploaded %s to GCS", header.Filename), "job", jobID)
 
 	// initialize new publisher everytime to avoid sending messages in batch.
 	// TODO: make this more tolerable to message delivery failures.
-	message := pubsubDecompressMsgSchema{
+	message := common.DecompressedMsgSchema{
 		UID:                jobID,
 		CompressedFilePath: compressedFilePath,
 	}
 	messageBytes, err := json.Marshal(message)
 	if err != nil {
 		slog.Error("Failed to marshal MQ message", "job", jobID, "error", err)
-		writeError(w, "Internal server error", http.StatusInternalServerError)
+		common.WriteError(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 	returnedMessageID, err := app.PUBSUBClient.PublishMessage(*app.CTX, app.DecompressTopicID, &pubsub.Message{
@@ -260,7 +222,7 @@ func (app *Application) decompressHandler(w http.ResponseWriter, r *http.Request
 	})
 	if err != nil {
 		slog.Error("Failed to send MQ message", "job", jobID, "error", err)
-		writeError(w, "Internal server error", http.StatusInternalServerError)
+		common.WriteError(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 	slog.Debug("Sent message to Pub/Sub ", "job", jobID, "server_generated_message_id", returnedMessageID)
@@ -305,8 +267,8 @@ func main() {
 	defer PUBSUBClient.Close()
 	slog.Debug("Initialized a Pub/Sub client.")
 
-	realGCS := &realGCSClient{client: GCSClient}
-	realPubSub := &realPubSubClient{client: PUBSUBClient}
+	realGCS := &common.RealGCSClient{Client: GCSClient}
+	realPubSub := &common.RealPubSubClient{Client: PUBSUBClient}
 
 	app := Application{
 		GCSClient:         realGCS,
