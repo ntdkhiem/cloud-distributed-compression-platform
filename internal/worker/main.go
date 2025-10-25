@@ -199,10 +199,10 @@ func main() {
 	realGCS := &common.RealGCSClient{Client: GCSClient}
 
 	app := Application{
-		GCSClient: realGCS,
-		CTX:       &ctx,
-		Bucket:    bucket,
-        GCSTimeout: 50 * time.Second,
+		GCSClient:  realGCS,
+		CTX:        &ctx,
+		Bucket:     bucket,
+		GCSTimeout: 50 * time.Second,
 	}
 
 	sub := PUBSUBClient.Subscriber(subID)

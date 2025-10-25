@@ -107,6 +107,7 @@ func buildTree(root *node, code string, bits int) {
 
 // TODO: assuming everything works like a champ. Add error handlers like
 // a normal person somewhere here
+// what if the freqTable is not json or not the right data structure?
 func buildHuffmanTree(freqTable map[rune]uint64) (priorityQueue, prefixTable, error) {
 	pq := make(priorityQueue, len(freqTable))
 	pt := make(prefixTable)
