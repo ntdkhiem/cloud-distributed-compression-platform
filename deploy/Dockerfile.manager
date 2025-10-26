@@ -1,0 +1,45 @@
+# ---------- Stage 1: Build ----------
+FROM golang:1.24-alpine AS builder
+
+# Security: no root, pin versions, and install minimal deps
+RUN adduser -D -g '' appuser && \
+    apk add --no-cache git ca-certificates && \
+    update-ca-certificates
+
+# Set working dir
+WORKDIR /src
+
+# Copy go.mod and go.sum first for caching
+COPY ../go.mod ../go.sum ./
+
+# Copy source
+COPY ../ .
+
+# Verify module integrity and download deps
+RUN go mod verify && go mod download
+
+# Security: disable CGO for static binary
+ENV CGO_ENABLED=0 GOOS=linux GOARCH=amd64
+
+# Build with stripped debug symbols for smaller binary
+RUN go build -trimpath -ldflags="-s -w" -o /bin/manager ./internal/manager
+
+# ---------- Stage 2: Runtime ----------
+FROM gcr.io/distroless/static-debian12:nonroot
+
+# Security:
+# - Distroless (no shell, no package manager)
+# - Runs as non-root by default (nonroot user in distroless)
+# - Minimal attack surface
+
+COPY --from=builder /bin/manager /manager
+
+# Expose HTTP port
+EXPOSE 8080
+
+# # Health check (optional for GKE)
+# HEALTHCHECK --interval=30s --timeout=5s CMD ["/manager", "healthcheck"]
+
+USER nonroot:nonroot
+
+ENTRYPOINT ["/manager"]
