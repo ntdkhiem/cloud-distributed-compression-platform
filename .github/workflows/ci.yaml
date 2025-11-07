@@ -1,0 +1,37 @@
+name: CI - Test and Lint
+
+on:
+  pull_request:
+    branches: [ 'main' ]
+  push:
+    branches: [ 'main' ]
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.24.3'
+
+      - name: Run go vet and lint on manager service
+        run: go fmt ./internal/manager && go vet ./interal/manager
+
+      - name: Run go vet and lint on worker service
+        run: go fmt ./internal/worker && go vet ./interal/worker
+
+      - name: Run go test on manager service
+        run: go test ./internal/manager
+
+      - name: Run go test on worker service
+        run: go test ./internal/worker
+
+      # - name: Build manager service
+      #   run: go build -v -o ./bin/manager ./internal/manager
+      #
+      # - name: Build worker service
+      #   run: go build -v -o ./bin/worker ./internal/worker

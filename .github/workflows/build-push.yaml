@@ -1,0 +1,62 @@
+name: Build and Push DCaaS to Artifact Registry
+
+on:
+  push:
+    branches: [ 'main' ]
+
+permissions:
+  contents: 'read'
+  id-token: 'write' # Required for workload identify federation.
+
+env:
+  PROJECT_ID: 'workfromhome-467300'
+  PROJECT_NUMBER: 185351738358
+  REGION: us-east1
+  REPO: dcaas-docker-repo
+  REGISTRY: ${{ env.REGION }}-docker.pkg.dev
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: 'auth'
+        name: 'AUthenticate with Google Cloud'
+        uses: 'google-github-actions/auth@v2'
+        with:
+          workload_identity_provider: ${{ secrets.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.SERVICE_ACCOUNT_EMAIL }} 
+
+      - uses: google-github-actions/setup-gcloud@v2
+      
+      # Configure Docker to authenticate to Artifact Registry
+      - name: 'Docker Auth with Artifact Registry'
+        run: gcloud auth configure-docker $REGISTRY --quiet
+
+      - name: 'Build and push Docker container for manager service'
+        run: |-
+          DOCKER_TAG="${Registry}/${PROJECT_ID}/${REPO}/manager-service:${GITHUB_SHA}"
+
+          docker build \
+            --tag "${DOCKER_TAG}" \
+            --build-arg GITHUB_SHA="${GITHUB_SHA}" \
+            --build-arg GITHUB_REF="${GITHUB_REF}" \
+            --file ./deploy/Dockerfile.manager \
+            .
+
+          docker push "${DOCKER_TAG}"
+
+      - name: 'Build and push Docker container for worker service'
+        run: |-
+          DOCKER_TAG="${Registry}/${PROJECT_ID}/${REPO}/worker-service:${GITHUB_SHA}"
+
+          docker build \
+            --tag "${DOCKER_TAG}" \
+            --build-arg GITHUB_SHA="${GITHUB_SHA}" \
+            --build-arg GITHUB_REF="${GITHUB_REF}" \
+            --file ./deploy/Dockerfile.worker \
+            .
+
+          docker push "${DOCKER_TAG}"
+
