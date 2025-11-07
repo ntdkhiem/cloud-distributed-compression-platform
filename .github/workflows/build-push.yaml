@@ -53,7 +53,7 @@ jobs:
 
       - name: 'Build and push Docker container for worker service'
         run: |
-          DOCKER_TAG="${Registry}/${PROJECT_ID}/${REPO}/worker-service:${GITHUB_SHA}"
+          DOCKER_TAG="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/worker-service:${GITHUB_SHA}"
 
           docker build \
             --tag "${DOCKER_TAG}" \
