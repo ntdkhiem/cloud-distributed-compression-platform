@@ -166,7 +166,11 @@ to another Reader.
 
 early optimization is killing my productivity. I'll revert back to original version now.
 
+----
 
+After a lot of consideration, I have decided to use the most basic version of the compression to 
+create a simple manager/worker services communication. Along with that, I have created unit tests
+thanks to Gemini and ChatGPT. Now, I'm going to containerize the services using Docker.
 
 
 
