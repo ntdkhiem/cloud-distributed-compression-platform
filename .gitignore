@@ -32,7 +32,7 @@ go.work.sum
 # .vscode/
 
 # 
-*.txt
+data/*.txt
 *.kn
 *private.json
 
