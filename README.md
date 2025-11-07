@@ -3,7 +3,7 @@
 A scalable, event-driven file compression system that processes large datasets in parallel using Go and Google Cloud services.
 
 > [!NOTE]
-> This is under active development. Follow my progress by watching on YouTube!
+> Follow my progress by watching on YouTube!
 > 
 > [CODING JOURNEY HERE](https://www.youtube.com/playlist?list=PLSg4pGV1EkBo1JCfXl4zZoHkbFe4zk_EL)
 
