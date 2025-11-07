@@ -25,14 +25,10 @@ jobs:
         run: go fmt ./internal/worker && go vet ./internal/worker
 
       - name: Run go test on manager service
-        run: |
-          cd internal/manager
-          go test -v .
+        run: cd ./internal/manager && go test -v .
 
       - name: Run go test on worker service
-        run: |
-          cd internal/worker
-          go test -v .
+        run: cd ./internal/worker && go test -v .
 
       # - name: Build manager service
       #   run: go build -v -o ./bin/manager ./internal/manager
