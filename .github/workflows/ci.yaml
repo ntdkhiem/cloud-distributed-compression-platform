@@ -6,12 +6,32 @@ on:
   push:
     branches: [ 'main' ]
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   ci:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Path Setup
+        id: go-paths
+        working-directory: ${{github.workspace}}
+        run: |
+          echo "gomodcache=$(go env GOMODCACHE)" >> $GITHUB_OUTPUT
+          echo "gocache=$(go env GOCACHE)" >> $GITHUB_OUTPUT
+
+      - name: Clone
       - uses: actions/checkout@v4
+
+      - name: Cache
+        uses: actions/cache@v3.0.10
+        with:
+          path: |
+            ${{ steps.go-paths.outputs.gomodcache }}
+            ${{ steps.go-paths.outputs.gocache }}
+          key: ${{ runner.os }}-gomodcache-${{ hashFiles('**/go.sum') }}
 
       - name: Set up Go
         uses: actions/setup-go@v4
