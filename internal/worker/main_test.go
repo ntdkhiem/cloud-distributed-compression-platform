@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 
@@ -172,6 +174,12 @@ func setupTestApp(t *testing.T) (*Application, *mockGCSClient) {
 // --- Tests ---
 
 func TestCompressMessageHandler(t *testing.T) {
+	t.Helper()
+	_, thisFile, _, _ := runtime.Caller(0)
+	testDir := filepath.Dir(thisFile)
+	testDataTXTPath := filepath.Join(testDir, "test_data", "test_data.txt")
+	compressedRANRANPath := filepath.Join(testDir, "test_data", "compressed.ranran")
+
 	app, mockGCS := setupTestApp(t)
 	jobID := uuid.New().String()
 
@@ -201,7 +209,7 @@ func TestCompressMessageHandler(t *testing.T) {
 		freqTableBytes, _ := json.Marshal(freqTable)
 		mockGCS.SetObject(freqTablePath, freqTableBytes)
 		// file streaming (check)
-		testContentReader, err := os.ReadFile("./test_data/test_data.txt")
+		testContentReader, err := os.ReadFile(testDataTXTPath)
 		if err != nil {
 			t.Errorf("Failed to read test content to test compression: %v", err)
 			return
@@ -221,7 +229,7 @@ func TestCompressMessageHandler(t *testing.T) {
 		if !ok {
 			t.Errorf("Expected compressed file %q to exist, but it doesn't", expectedCompressedPath)
 		}
-		actualContentReader, err := os.ReadFile("./test_data/cmpressed.ranran")
+		actualContentReader, err := os.ReadFile(compressedRANRANPath)
 		if err != nil {
 			t.Errorf("Failed to read compressed data for testing: %v", err)
 			return
@@ -288,6 +296,12 @@ func TestCompressMessageHandler(t *testing.T) {
 }
 
 func TestDecompressMessageHandler(t *testing.T) {
+	t.Helper()
+	_, thisFile, _, _ := runtime.Caller(0)
+	testDir := filepath.Dir(thisFile)
+	testDataTXTPath := filepath.Join(testDir, "test_data", "test_data.txt")
+	compressedRANRANPath := filepath.Join(testDir, "test_data", "compressed.ranran")
+
 	jobID := uuid.New().String()
 
 	t.Run("success", func(t *testing.T) {
@@ -304,9 +318,9 @@ func TestDecompressMessageHandler(t *testing.T) {
 		mockMsg := &mockMessage{data: msgBytes}
 
 		// compressfile exists (check)
-		compressedTestDataReader, err := os.ReadFile("./test_data/compressed.ranran")
+		compressedTestDataReader, err := os.ReadFile(compressedRANRANPath)
 		if err != nil {
-			t.Error("Could not find compressed content to test decompression")
+			t.Errorf("Failed to read compressed content to test decompression: %v", err)
 			return
 		}
 		mockGCS.SetObject(compressedPath, bytes.NewBuffer(compressedTestDataReader).Bytes())
@@ -320,9 +334,9 @@ func TestDecompressMessageHandler(t *testing.T) {
 		if !ok {
 			t.Errorf("Expected compressed file %q to exist, but it doesn't", expectedFinalPath)
 		}
-		actualContentReader, err := os.ReadFile("./test_data/test_data.txt")
+		actualContentReader, err := os.ReadFile(testDataTXTPath)
 		if err != nil {
-			t.Error("Could not find actual content to verify against decompressed data")
+			t.Errorf("Failed to read actual content to verify against decompressed data: %v", err)
 			return
 		}
 
