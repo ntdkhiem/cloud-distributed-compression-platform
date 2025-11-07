@@ -1,0 +1,5 @@
+# Ignore common development-related files and directories for Go
+.git
+.github/
+.gitignore
+.env
