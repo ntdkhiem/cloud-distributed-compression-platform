@@ -19,10 +19,10 @@ jobs:
           go-version: '1.24.3'
 
       - name: Run go vet and lint on manager service
-        run: go fmt ./internal/manager && go vet ./interal/manager
+        run: go fmt ./internal/manager && go vet ./internal/manager
 
       - name: Run go vet and lint on worker service
-        run: go fmt ./internal/worker && go vet ./interal/worker
+        run: go fmt ./internal/worker && go vet ./internal/worker
 
       - name: Run go test on manager service
         run: go test ./internal/manager
