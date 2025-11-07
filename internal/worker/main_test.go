@@ -203,7 +203,7 @@ func TestCompressMessageHandler(t *testing.T) {
 		// file streaming (check)
 		testContentReader, err := os.ReadFile("./test_data/test_data.txt")
 		if err != nil {
-			t.Error("Could not find test content to test compression")
+			t.Errorf("Failed to read test content to test compression: %v", err)
 			return
 		}
 		mockGCS.SetObject(originalFilePath, bytes.NewBuffer(testContentReader).Bytes())
@@ -221,9 +221,9 @@ func TestCompressMessageHandler(t *testing.T) {
 		if !ok {
 			t.Errorf("Expected compressed file %q to exist, but it doesn't", expectedCompressedPath)
 		}
-		actualContentReader, err := os.ReadFile("./test_data/compressed.ranran")
+		actualContentReader, err := os.ReadFile("./test_data/cmpressed.ranran")
 		if err != nil {
-			t.Error("Could not find actual content to verify against compressed data")
+			t.Errorf("Failed to read compressed data for testing: %v", err)
 			return
 		}
 
