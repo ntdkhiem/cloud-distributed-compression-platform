@@ -36,7 +36,7 @@ jobs:
       
       # Configure Docker to authenticate to Artifact Registry
       - name: 'Docker Auth with Artifact Registry'
-        run: gcloud auth configure-docker $REGISTRY --quiet
+        run: gcloud auth configure-docker ${REGION}-docker.pkg.dev --quiet
 
       - name: 'Build and push Docker container for manager service'
         run: |
