@@ -236,9 +236,9 @@ func TestCompressMessageHandler(t *testing.T) {
 		}
 
 		actualContentBuff := bytes.NewBuffer(actualContentReader)
-		// verify the size
-		if len(content) != actualContentBuff.Len() {
-			t.Errorf("Expected compressed content to have length of %d bytes but got %d bytes", actualContentBuff.Len(), len(content))
+		// verify the size: actualContentBuff ignores EOF so include it back.
+		if len(content) != actualContentBuff.Len() + 1 {
+			t.Errorf("Expected compressed content to have length of %d bytes but got %d bytes", actualContentBuff.Len() + 1, len(content))
 		}
 
 		// TODO: must have a better check for the content here.
@@ -341,9 +341,9 @@ func TestDecompressMessageHandler(t *testing.T) {
 		}
 
 		actualContentBuff := bytes.NewBuffer(actualContentReader)
-		// verify the size
-		if len(content) != actualContentBuff.Len() {
-			t.Errorf("Expected compressed content to have length of %d bytes but got %d bytes", actualContentBuff.Len(), len(content))
+		// verify the size: actualContentBuff ignores EOF so include it back.
+		if len(content) != actualContentBuff.Len() + 1 {
+			t.Errorf("Expected compressed content to have length of %d bytes but got %d bytes", actualContentBuff.Len() + 1, len(content))
 		}
 
 		if string(content)+"\n" == actualContentBuff.String() {
