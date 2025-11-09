@@ -165,7 +165,7 @@ func main() {
 	flag.Parse()
 
 	// initialize logging system
-	var programLevel = new(slog.LevelVar) // Info by default
+	programLevel := new(slog.LevelVar) // Info by default
 	developmentMode := os.Getenv("DEVELOPMENT_MODE")
 	isDev, err := strconv.ParseBool(developmentMode)
 	if err == nil && isDev {

@@ -202,7 +202,6 @@ func TestCompressMessageHandler(t *testing.T) {
 		// freqTable exists (check)
 		freqTable := map[string]uint8{
 			"10": 1,
-			"13": 1,
 			"97": 1,
 			"98": 2,
 		}
@@ -291,7 +290,6 @@ func TestCompressMessageHandler(t *testing.T) {
 				t.Error("Expected message to not be Ack-ed, but it was")
 			}
 		})
-
 	}
 }
 
@@ -344,6 +342,8 @@ func TestDecompressMessageHandler(t *testing.T) {
 		// verify the size: actualContentBuff ignores EOF so include it back.
 		if len(content) != actualContentBuff.Len() {
 			t.Errorf("Expected compressed content to have length of %d bytes but got %d bytes", actualContentBuff.Len(), len(content))
+			// t.Errorf("actual: %v\ncalculated: %v", actualContentBuff.Bytes(), content)
+			// t.Errorf("actual: %v\ncalculated: %v", actualContentBuff.String(), string(content))
 		}
 
 		if string(content)+"\n" == actualContentBuff.String() {

@@ -63,8 +63,10 @@ func (hn *node) walker() func(int) (rune, bool) {
 	}
 }
 
-type prefixTable map[rune]*lookupItem
-type priorityQueue []*node
+type (
+	prefixTable   map[rune]*lookupItem
+	priorityQueue []*node
+)
 
 func (pq priorityQueue) Len() int { return len(pq) }
 
@@ -262,6 +264,7 @@ func compress(root *node, pt prefixTable, bodyData *bufio.Reader) (*bytes.Buffer
 
 // // TODO: assuming this will go correctly, I need to have some good test cases
 // // for this.
+//
 // func buildHuffmanTreeFromBin(headerBin []byte) *node {
 // 	ht := node{}
 // 	// character code + Huffman assigned code + bits -> 4 + 4 + 1 = 9 bytes
@@ -332,6 +335,7 @@ func decompress(buf *bytes.Buffer, wc common.GCSObjectWriterInterface) error {
 			v, ok := walk(int(bit))
 			if ok {
 				// decompText.WriteRune(rune(v))
+				// TODO: optimize this horrendous thing.
 				wc.Write([]byte(string(v)))
 				walk = ht.walker()
 			}
