@@ -70,16 +70,12 @@ _(Instructions to be added)_
 - This design assumes a "happy path". In a distributed system, any network call can fail and any message can be delivered more than once.
 - A flood of traffic to Manager Service can lead to massive scalability issues, especially with large files, in which the service is designed to stream one file at a time.
 - How the heck can I even debug this asynchronous architecture?
-- Google managed services are not 100% SLA.
+- Google managed services are not 100% SLA. (obviously)
 - Services can access GCS and Pub/Sub with no known rate limits, quotas.
 
 ## Todo
-- Write unit tests and integration tests for manager and worker services.
-- Containerize services with Docker.
-- Use Kubernetes (GKE) to manage, scale, and orchestrate the services.
-- Build Continuous Integration (CI) pipeline with Github Actions.
-- Build Continuous Deployment (CD) pipeline with ArgoCD.
 - Integrate Google Cloud Operations Suite for monitoring, logging, and tracing.
+- Build Continuous Deployment (CD) pipeline with ArgoCD.
 - Implement retries logic at streaming data, sending/receiving messages to/from Message Queue, etc.
 - Create a budget plan to estimate the cost of running this system on Google Cloud Platform (GCP).
 - Split file (>= 50GB) in chunks for parallel compression. **Requires architecture redesign**
